@@ -1,8 +1,7 @@
 #include "ntp_time.h"
 #include "esp_log.h"
-#include "esp_sntp.h"
-#include <string.h>
 #include "esp_netif_sntp.h"
+#include <string.h>
 
 #define TAG "ntp"
 
@@ -18,8 +17,8 @@ bool ntp_time_sync(uint32_t timeout_sec)
 {
     s_time_synced = false;
 
-    // 配置 SNTP（ESP-IDF v5.3+ 使用新 API）
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    // 使用阿里云 NTP 服务器的 IP 地址，避免 DNS 解析
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("203.107.6.88");
     config.sync_cb = time_sync_notification_cb;
     esp_netif_sntp_init(&config);
 

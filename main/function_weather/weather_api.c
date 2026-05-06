@@ -46,7 +46,7 @@ static void _build_url(float lat, float lon, char *url_buf, size_t buf_size)
     // 请求参数：温度(°C)、天气码、相对湿度、时间格式为 Unix 时间戳、只未来1天
     snprintf(url_buf, buf_size,
              "%s?latitude=%s&longitude=%s&hourly=temperature_2m,weathercode,relativehumidity_2m"
-             "&timeformat=unixtime&forecast_days=1&timezone=auto",
+             "&timeformat=unixtime&forecast_days=2&timezone=auto",
              OWM_URL, OWM_LAT, OWM_LON);
 }
 

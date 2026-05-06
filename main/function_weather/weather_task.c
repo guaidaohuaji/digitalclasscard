@@ -8,8 +8,9 @@
 #include "freertos/task.h"
 #include <stdio.h>
 #include <math.h>
-#include <stdlib.h>   
+#include <stdlib.h>
 #include <time.h>
+
 #define TAG "weather_task"
 
 #define WEATHER_UPDATE_INTERVAL_SEC  1800
@@ -18,14 +19,14 @@
 #define SCHOOL_LAT  30.2741f
 #define SCHOOL_LON  120.1551f
 
-// 改为指针，在任务内动态分配
+// 动态分配，存储 48 条逐小时数据（两天）
 static weather_hourly_t *g_hourly_data = NULL;
 static int g_hourly_count = 0;
 
 static void weather_task(void *pvParameters)
 {
-    // 分配 24 条预报数据的空间
-    g_hourly_data = (weather_hourly_t *)malloc(sizeof(weather_hourly_t) * 24);
+    // 分配 48 条预报数据的空间（两天逐小时）
+    g_hourly_data = (weather_hourly_t *)malloc(sizeof(weather_hourly_t) * 48);
     if (!g_hourly_data) {
         ESP_LOGE(TAG, "无法分配天气预报缓冲区");
         vTaskDelete(NULL);
@@ -71,42 +72,78 @@ static void weather_task(void *pvParameters)
             int retry = 0;
             while (retry < 3 && ret != 0) {
                 ret = weather_fetch_forecast(SCHOOL_LAT, SCHOOL_LON,
-                                             g_hourly_data, 24, &g_hourly_count);
+                                             g_hourly_data, 48, &g_hourly_count);
                 if (ret != 0) {
                     ESP_LOGE(TAG, "获取天气失败，重试 %d/3，错误码: %d", retry + 1, ret);
-                    vTaskDelay(pdMS_TO_TICKS(10000));  // 等待 10 秒再试
+                    vTaskDelay(pdMS_TO_TICKS(10000));
                     retry++;
                 }
             }
 
-            if (ret == 0 && g_hourly_count > 0) {
-                int temps[8];
-                const char *times[8];          // 改为时间字符串数组
-                char time_str_buf[8][6];       // 存储“HH:00\0”，共5个字符+结束符
+            if (ret == 0 && g_hourly_count >= 16) {
+                // 拆分为今天和明天各 8 个点（每 3 小时）
+                int today_temps[8], tomorrow_temps[8];
+                const char *today_descs[8], *tomorrow_descs[8];
+                const char *today_times[8], *tomorrow_times[8];
+                char today_time_buf[8][6], tomorrow_time_buf[8][6];
 
-                int step = (g_hourly_count > 8) ? (g_hourly_count / 8) : 1;
+                int step = 3;  // 逐小时数据，间隔 3 取点
+                // 今天数据：索引 0~23，取 i*step
                 for (int i = 0; i < 8; i++) {
                     int idx = i * step;
                     if (idx >= g_hourly_count) idx = g_hourly_count - 1;
-                    temps[i] = (int)roundf(g_hourly_data[idx].temp);
-
-                    // 将时间戳转换为 HH:00
+                    today_temps[i] = (int)roundf(g_hourly_data[idx].temp);
+                    today_descs[i] = g_hourly_data[idx].desc;
                     time_t t = (time_t)g_hourly_data[idx].timestamp;
-                    struct tm timeinfo;
-                    localtime_r(&t, &timeinfo);
-                    snprintf(time_str_buf[i], sizeof(time_str_buf[i]), "%02d:00", timeinfo.tm_hour);
-                    times[i] = time_str_buf[i];
+                    struct tm tm_info;
+                    localtime_r(&t, &tm_info);
+                    snprintf(today_time_buf[i], sizeof(today_time_buf[i]), "%02d:%02d",
+                             tm_info.tm_hour, tm_info.tm_min);
+                    today_times[i] = today_time_buf[i];
                 }
-                ui_update_weather_hourly(temps, times, 8);   // 传入时间数组
+                // 明天数据：索引 8*step 开始，同样间隔 step
+                for (int i = 0; i < 8; i++) {
+                    int idx = 8 * step + i * step;
+                    if (idx >= g_hourly_count) idx = g_hourly_count - 1;
+                    tomorrow_temps[i] = (int)roundf(g_hourly_data[idx].temp);
+                    tomorrow_descs[i] = g_hourly_data[idx].desc;
+                    time_t t = (time_t)g_hourly_data[idx].timestamp;
+                    struct tm tm_info;
+                    localtime_r(&t, &tm_info);
+                    snprintf(tomorrow_time_buf[i], sizeof(tomorrow_time_buf[i]), "%02d:%02d",
+                             tm_info.tm_hour, tm_info.tm_min);
+                    tomorrow_times[i] = tomorrow_time_buf[i];
+                }
 
-                // 当前天气描述保持不变
-                char cur_buf[128];
-                snprintf(cur_buf, sizeof(cur_buf), "%.0f°C   %s",
-                        g_hourly_data[0].temp,
-                        g_hourly_data[0].desc);
-                ui_update_weather_info(cur_buf);
+                // 计算今天和明天的日期（取第一个预报时间戳）
+                time_t today_ts = (time_t)g_hourly_data[0].timestamp;
+                time_t tomorrow_ts = (time_t)g_hourly_data[8 * step].timestamp;
+                struct tm tm_today, tm_tomorrow;
+                localtime_r(&today_ts, &tm_today);
+                localtime_r(&tomorrow_ts, &tm_tomorrow);
+                char today_date[16], tomorrow_date[16];
+                strftime(today_date, sizeof(today_date), "%m-%d", &tm_today);
+                strftime(tomorrow_date, sizeof(tomorrow_date), "%m-%d", &tm_tomorrow);
 
-                ESP_LOGI(TAG, "天气数据已更新（%d 条）", g_hourly_count);
+                // 寻找今天高亮索引（距离当前时间最近的点）
+                time_t now_ts = time(NULL);
+                int highlight = 0;
+                time_t min_diff = (time_t)abs((int)(g_hourly_data[0].timestamp - now_ts));
+                for (int i = 1; i < 8; i++) {
+                    int idx = i * step;
+                    if (idx >= g_hourly_count) break;
+                    time_t diff = (time_t)abs((int)(g_hourly_data[idx].timestamp - now_ts));
+                    if (diff < min_diff) {
+                        min_diff = diff;
+                        highlight = i;
+                    }
+                }
+                ESP_LOGI(TAG, "highlight index = %d", highlight);
+                // 更新 UI
+                ui_update_today_forecast(today_temps, today_descs, today_times, today_date, highlight);
+                ui_update_tomorrow_forecast(tomorrow_temps, tomorrow_descs, tomorrow_times, tomorrow_date);
+
+                ESP_LOGI(TAG, "天气数据已更新（今天 %d 点，明天 %d 点）", 8, 8);
             } else {
                 ESP_LOGE(TAG, "获取天气数据最终失败，错误码: %d", ret);
             }

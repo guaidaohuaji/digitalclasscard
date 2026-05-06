@@ -4,7 +4,7 @@
 static void btn_back_cb(lv_event_t *e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ui_show_menu();
+        ui_show_weather();
     }
 }
 

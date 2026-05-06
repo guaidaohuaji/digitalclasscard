@@ -5,7 +5,6 @@ idf_component_register(
         lv_font_utf_24.c
         myicon_font.c
         ui/ui.c
-        ui/screen_menu.c
         ui/screen_weather.c
         ui/screen_face.c
         ui/screen_ai.c

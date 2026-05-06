@@ -14,4 +14,9 @@ void ui_show_weather(void);
 void ui_show_face(void);
 void ui_show_ai(void);
 
+
+void ui_update_weather_time(const char *time_str);
+void ui_update_weather_date(const char *date_str);
+void ui_update_weather_info(const char *weather_str);
+void ui_update_weather_hourly(int temps[], const char *times[], int count);
 LV_FONT_DECLARE(lv_font_utf_24);

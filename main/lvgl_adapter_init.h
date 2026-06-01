@@ -22,6 +22,14 @@ typedef struct {
 
 lv_display_t *lvgl_adapter_init(const bsp_display_cfg_t *cfg);
 
+/**
+ * @brief 注册 LVGL 文件系统驱动字母 'S'，映射到 SD 卡根目录
+ * 
+ * 调用此函数后，LVGL 可通过 "S:/filename" 路径访问 SD 卡上的文件。
+ * 必须在 SD 卡挂载成功后调用。
+ */
+void lvgl_adapter_register_sd_fs(void);
+
 #ifdef __cplusplus
 }
 #endif

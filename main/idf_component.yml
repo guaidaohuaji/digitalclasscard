@@ -5,6 +5,9 @@ dependencies:
   lvgl/lvgl:
     version: "9.4.*"
     public: true
+  espressif/freetype:
+    version: "2.*"
+    public: true
   espressif/esp_lvgl_adapter:
     version: "0.3.*"
     public: true
@@ -17,3 +20,5 @@ dependencies:
     version: "~2"
     rules:
       - if: "target in [esp32p4, esp32h2]"
+  #espressif/es8311: "^1.0.0"            # 建议使用最新版
+  #espressif/esp_codec_dev: "^1.5.9"     # 提供 codec 设备抽象

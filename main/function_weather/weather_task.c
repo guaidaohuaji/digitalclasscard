@@ -74,20 +74,21 @@ static void weather_task(void *pvParameters)
                 ret = weather_fetch_forecast(SCHOOL_LAT, SCHOOL_LON,
                                              g_hourly_data, 48, &g_hourly_count);
                 if (ret != 0) {
-                    ESP_LOGE(TAG, "获取天气失败，重试 %d/3，错误码: %d", retry + 1, ret);
-                    vTaskDelay(pdMS_TO_TICKS(10000));
+                    // 等待 65s 确保 TIME_WAIT 回收完毕（配合 MSL=15s 可缩短至 20s+，但保守起见保持 65s）
+                    ESP_LOGE(TAG, "获取天气失败，重试 %d/3（65s 后），错误码: %d", retry + 1, ret);
+                    vTaskDelay(pdMS_TO_TICKS(65000));
                     retry++;
                 }
             }
 
-            if (ret == 0 && g_hourly_count >= 16) {
-                // 拆分为今天和明天各 8 个点（每 3 小时）
+            if (ret == 0 && g_hourly_count > 0) {
+                // 拆分为今天和明天各 8 个点（每 3 小时取一个）
                 int today_temps[8], tomorrow_temps[8];
                 const char *today_descs[8], *tomorrow_descs[8];
                 const char *today_times[8], *tomorrow_times[8];
                 char today_time_buf[8][6], tomorrow_time_buf[8][6];
 
-                int step = 3;  // 逐小时数据，间隔 3 取点
+                int step = 3;  // 逐小时数据，间隔 3 小时取点
                 // 今天数据：索引 0~23，取 i*step
                 for (int i = 0; i < 8; i++) {
                     int idx = i * step;
@@ -101,9 +102,13 @@ static void weather_task(void *pvParameters)
                              tm_info.tm_hour, tm_info.tm_min);
                     today_times[i] = today_time_buf[i];
                 }
-                // 明天数据：索引 8*step 开始，同样间隔 step
+                // 明天数据：索引从第24小时开始（0~23是今天，24~47是明天）
+                int tomorrow_start = step * 8;  // = 24（如果有完整48条）
+                if (tomorrow_start >= g_hourly_count) {
+                    tomorrow_start = g_hourly_count / 2;  // 数据不够时折半
+                }
                 for (int i = 0; i < 8; i++) {
-                    int idx = 8 * step + i * step;
+                    int idx = tomorrow_start + i * step;
                     if (idx >= g_hourly_count) idx = g_hourly_count - 1;
                     tomorrow_temps[i] = (int)roundf(g_hourly_data[idx].temp);
                     tomorrow_descs[i] = g_hourly_data[idx].desc;
@@ -115,9 +120,15 @@ static void weather_task(void *pvParameters)
                     tomorrow_times[i] = tomorrow_time_buf[i];
                 }
 
-                // 计算今天和明天的日期（取第一个预报时间戳）
+                if (g_hourly_count < 16) {
+                    ESP_LOGW(TAG, "警告：只获取到 %d 条数据，预计少于48条，UI可能不完整", g_hourly_count);
+                }
+
+                // 计算今天和明天的日期
                 time_t today_ts = (time_t)g_hourly_data[0].timestamp;
-                time_t tomorrow_ts = (time_t)g_hourly_data[8 * step].timestamp;
+                int tomorrow_idx = step * 8;
+                if (tomorrow_idx >= g_hourly_count) tomorrow_idx = g_hourly_count - 1;
+                time_t tomorrow_ts = (time_t)g_hourly_data[tomorrow_idx].timestamp;
                 struct tm tm_today, tm_tomorrow;
                 localtime_r(&today_ts, &tm_today);
                 localtime_r(&tomorrow_ts, &tm_tomorrow);

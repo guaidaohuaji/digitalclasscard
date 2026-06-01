@@ -5,17 +5,17 @@
 #include "esp_crt_bundle.h"
 #include <string.h>
 #include <stdlib.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define TAG "weather_api"
 
 // ========== Open-Meteo 免费天气 API ==========
-// 无需 API Key！请修改为你的学校经纬度
-#define OWM_LAT             "30.2741"   // 纬度
-#define OWM_LON             "120.1551"  // 经度
-// 请求未来 1 天的逐小时温度 + 天气码
+// 无需 API Key！
 #define OWM_URL             "https://api.open-meteo.com/v1/forecast"
-// 响应数据很小，4KB 足够
-#define WEATHER_HTTP_BUF_SIZE 4096
+// 48 小时 × 4 数组(timestamp+temp+code+humidity) 的 JSON 约 8~12KB，
+// 分配 16KB 确保不截断
+#define WEATHER_HTTP_BUF_SIZE 16384
 // ============================================
 
 static char *g_http_buf = NULL;
@@ -41,13 +41,12 @@ static esp_err_t _http_event_handler(esp_http_client_event_t *evt)
 /* 构建请求 URL */
 static void _build_url(float lat, float lon, char *url_buf, size_t buf_size)
 {
-    (void)lat;
-    (void)lon;
-    // 请求参数：温度(°C)、天气码、相对湿度、时间格式为 Unix 时间戳、只未来1天
     snprintf(url_buf, buf_size,
-             "%s?latitude=%s&longitude=%s&hourly=temperature_2m,weathercode,relativehumidity_2m"
-             "&timeformat=unixtime&forecast_days=2&timezone=auto",
-             OWM_URL, OWM_LAT, OWM_LON);
+             "%s?latitude=%.4f&longitude=%.4f"
+             "&hourly=temperature_2m,weathercode,relativehumidity_2m"
+             "&timeformat=unixtime&forecast_hours=48&timezone=auto",
+             OWM_URL, (double)lat, (double)lon);
+    ESP_LOGI(TAG, "请求 URL: %s", url_buf);
 }
 
 int weather_fetch_forecast(float lat, float lon,
@@ -71,24 +70,38 @@ int weather_fetch_forecast(float lat, float lon,
     char url[512];
     _build_url(lat, lon, url, sizeof(url));
 
-    // 2. HTTP 客户端配置（HTTPS + 证书包）
+    // 2. HTTP 客户端配置（HTTPS + Keep-Alive 复用连接）
     esp_http_client_config_t http_cfg = {
         .url = url,
         .method = HTTP_METHOD_GET,
         .timeout_ms = 15000,
         .event_handler = _http_event_handler,
-        .buffer_size = 1024,
-        .keep_alive_enable = false,
+        .buffer_size = 4096,
+        // ---- Keep-Alive：复用 TLS 连接，避免频繁创建/销毁 socket ----
+        .keep_alive_enable = true,
+        .keep_alive_idle = 10,     // 10s 空闲后发送 Keep-Alive 探测
+        .keep_alive_interval = 5,  // 探测间隔 5s
+        .keep_alive_count = 3,     // 最多 3 次探测
         .crt_bundle_attach = esp_crt_bundle_attach,   // 验证证书
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);
+    if (!client) {
+        ESP_LOGE(TAG, "HTTP 客户端初始化失败");
+        return -1;
+    }
+
     esp_err_t err = esp_http_client_perform(client);
     int status_code = (err == ESP_OK) ? esp_http_client_get_status_code(client) : 0;
+
     esp_http_client_cleanup(client);
 
     if (err != ESP_OK || status_code != 200) {
         ESP_LOGE(TAG, "HTTP 失败，err=%d, status=%d", err, status_code);
+        // 打印部分响应便于排查
+        if (g_http_buf_len > 0) {
+            ESP_LOGE(TAG, "响应体(前200字节): %.200s", g_http_buf);
+        }
         return -1;
     }
 
@@ -97,7 +110,9 @@ int weather_fetch_forecast(float lat, float lon,
     // 3. 解析 JSON
     cJSON *root = cJSON_Parse(g_http_buf);
     if (!root) {
-        ESP_LOGE(TAG, "JSON 解析失败");
+        const char *err_ptr = cJSON_GetErrorPtr();
+        ESP_LOGE(TAG, "JSON 解析失败: %s", err_ptr ? err_ptr : "unknown");
+        ESP_LOGE(TAG, "原始响应(前400字节): %.400s", g_http_buf);
         return -2;
     }
 
@@ -127,10 +142,9 @@ int weather_fetch_forecast(float lat, float lon,
         return -5;
     }
 
-    // 4. 从 24 条中均匀抽取最多 max_count 条（通常为 8）
-    int step = (total > max_count) ? (total / max_count) : 1;
+    // 4. 逐条填充全部数据（不做抽取，返回全部 48 条）
     int count = 0;
-    for (int i = 0; i < total && count < max_count; i += step) {
+    for (int i = 0; i < total && i < max_count; i++) {
         cJSON *t = cJSON_GetArrayItem(time_arr, i);
         cJSON *v = cJSON_GetArrayItem(temp_arr, i);
         cJSON *w = cJSON_GetArrayItem(code_arr, i);

@@ -84,11 +84,6 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "SD card mounted successfully at %s", BSP_SD_MOUNT_POINT);
         lvgl_adapter_register_sd_fs();  // 注册 LVGL 'S:' 驱动字母
-
-        // 在 SD 卡就绪后延迟加载 FreeType 中文字体（必须在 S: 驱动注册之后）
-        ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
-        screen_ai_font_init();
-        esp_lv_adapter_unlock();
     }
 
     // 7. 初始化音频录制模块

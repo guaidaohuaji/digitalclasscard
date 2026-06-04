@@ -11,8 +11,6 @@ void ui_init(lv_display_t *disp);
 void ui_show_weather(void);
 void ui_show_face(void);
 void ui_show_ai(void);
-void screen_ai_font_init(void);
-
 void ui_update_weather_time(const char *time_str);
 void ui_update_weather_date(const char *date_str);
 

@@ -8,8 +8,6 @@
 #include "freertos/task.h"
 #include "esp_lv_adapter.h"
 #include "bsp/esp-bsp.h"
-#include <sys/stat.h>
-#include <errno.h>
 
 static const char *TAG = "screen_ai";
 
@@ -23,10 +21,6 @@ static bool        s_processing = false; // 防止重复处理
 
 // 前向声明
 static void rec_timer_cb(lv_timer_t *timer);
-
-// FreeType 中文字体 (从 SD 卡加载)
-static lv_font_t *g_chinese_font = NULL;
-static bool       g_font_ready = false;
 
 // 向对话框添加一条文字
 static void chat_add_message(const char *role, const char *text, lv_color_t color)
@@ -45,11 +39,7 @@ static void chat_add_message(const char *role, const char *text, lv_color_t colo
     lv_obj_t *label = lv_label_create(msg);
     lv_label_set_text_fmt(label, "[%s] %s", role, text);
     lv_obj_set_style_text_color(label, color, 0);
-    if (g_font_ready && g_chinese_font) {
-        lv_obj_set_style_text_font(label, g_chinese_font, 0);
-    } else {
-        lv_obj_set_style_text_font(label, &lv_font_utf_24, 0);
-    }
+    lv_obj_set_style_text_font(label, &lv_font_utf_24, 0);
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
 }
 
@@ -194,43 +184,6 @@ static void btn_back_cb(lv_event_t *e)
     }
 }
 
-void screen_ai_font_init(void)
-{
-#if defined(CONFIG_LV_USE_FREETYPE) && CONFIG_LV_USE_FREETYPE
-    if (g_font_ready) return;
-
-    // 1. 检查 SD 卡上字体文件是否存在
-    const char *font_path = BSP_SD_MOUNT_POINT "/simhei.ttf";
-    struct stat st;
-    if (stat(font_path, &st) != 0) {
-        ESP_LOGE(TAG, "Font file not found: %s (errno=%d). "
-                      "Please copy simhei.ttf to SD card root.", font_path, errno);
-        return;
-    }
-    ESP_LOGI(TAG, "Font file found: %s (%ld bytes)", font_path, (long)st.st_size);
-
-    // 2. 初始化 FreeType 引擎（LVGL v9 + LV_FREETYPE_USE_LVGL_PORT 必须调用）
-    lv_result_t ft_ret = lv_freetype_init(1);  // 参数 max_faces: 同步打开的最大字体数
-    if (ft_ret != LV_RESULT_OK) {
-        ESP_LOGE(TAG, "lv_freetype_init() failed: %d", ft_ret);
-        return;
-    }
-
-    // 3. 创建 FreeType 字体
-    g_chinese_font = lv_freetype_font_create("S:/simhei.ttf",
-                                              LV_FREETYPE_FONT_RENDER_MODE_BITMAP,
-                                              24,
-                                              LV_FREETYPE_FONT_STYLE_NORMAL);
-    if (g_chinese_font) {
-        ESP_LOGI(TAG, "FreeType 中文字体加载成功 (24px)");
-        g_font_ready = true;
-    } else {
-        ESP_LOGE(TAG, "lv_freetype_font_create() failed. "
-                      "Font: %s, size: 24, mode: BITMAP", font_path);
-    }
-#endif
-}
-
 void screen_ai_create(lv_obj_t *scr)
 {
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x1a1a2e), 0);
@@ -255,11 +208,7 @@ void screen_ai_create(lv_obj_t *scr)
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "AI Assistant");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
-    if (g_font_ready && g_chinese_font) {
-        lv_obj_set_style_text_font(title, g_chinese_font, 0);
-    } else {
-        lv_obj_set_style_text_font(title, &lv_font_utf_24, 0);
-    }
+    lv_obj_set_style_text_font(title, &lv_font_utf_24, 0);
     lv_obj_center(title);
 
     // -------- 对话框 --------
@@ -274,11 +223,7 @@ void screen_ai_create(lv_obj_t *scr)
     lv_obj_t *chat_hint = lv_label_create(chat_box);
     lv_label_set_text(chat_hint, "对话将显示在这里...");
     lv_obj_set_style_text_color(chat_hint, lv_color_hex(0x666666), 0);
-    if (g_font_ready && g_chinese_font) {
-        lv_obj_set_style_text_font(chat_hint, g_chinese_font, 0);
-    } else {
-        lv_obj_set_style_text_font(chat_hint, &lv_font_utf_24, 0);
-    }
+    lv_obj_set_style_text_font(chat_hint, &lv_font_utf_24, 0);
 
     // -------- 录音进度条区域 (默认隐藏) --------
     rec_bar = lv_bar_create(scr);
@@ -294,11 +239,7 @@ void screen_ai_create(lv_obj_t *scr)
     lv_label_set_text(rec_time_label, "0s / 60s");
     lv_obj_set_style_text_color(rec_time_label, lv_color_hex(0xaaaaaa), 0);
     lv_obj_align(rec_time_label, LV_ALIGN_BOTTOM_MID, 0, -125);
-    if (g_font_ready && g_chinese_font) {
-        lv_obj_set_style_text_font(rec_time_label, g_chinese_font, 0);
-    } else {
-        lv_obj_set_style_text_font(rec_time_label, &lv_font_utf_24, 0);
-    }
+    lv_obj_set_style_text_font(rec_time_label, &lv_font_utf_24, 0);
     lv_obj_add_flag(rec_time_label, LV_OBJ_FLAG_HIDDEN);
 
     // -------- 底部输入区域 --------
@@ -316,22 +257,14 @@ void screen_ai_create(lv_obj_t *scr)
     lv_obj_t *mic_label = lv_label_create(mic_btn);
     lv_label_set_text(mic_label, LV_SYMBOL_AUDIO " 按住说话");
     lv_obj_center(mic_label);
-    if (g_font_ready && g_chinese_font) {
-        lv_obj_set_style_text_font(mic_label, g_chinese_font, 0);
-    } else {
-        lv_obj_set_style_text_font(mic_label, &lv_font_utf_24, 0);
-    }
+    lv_obj_set_style_text_font(mic_label, &lv_font_utf_24, 0);
 
     // 状态提示
     status_label = lv_label_create(bottom);
     lv_label_set_text(status_label, "Hold button to start speaking");
     lv_obj_set_style_text_color(status_label, lv_color_hex(0xaaaaaa), 0);
     lv_obj_align(status_label, LV_ALIGN_LEFT_MID, 10, 0);
-    if (g_font_ready && g_chinese_font) {
-        lv_obj_set_style_text_font(status_label, g_chinese_font, 0);
-    } else {
-        lv_obj_set_style_text_font(status_label, &lv_font_utf_24, 0);
-    }
+    lv_obj_set_style_text_font(status_label, &lv_font_utf_24, 0);
 
     // 绑定录音按钮事件
     lv_obj_add_event_cb(mic_btn, mic_press_cb, LV_EVENT_PRESSED, NULL);

@@ -169,7 +169,7 @@ dependencies:
       type: service
     version: 1.0.4
   espressif/esp_hosted:
-    component_hash: a424e4cf8de13b657d09f14dbd615cc946cffdc3f032509915d3058f4637fa72
+    component_hash: 037d55a70dc5e2699754c0f3e21427d0df4ff29dc89cc80746978ad5b9dc4589
     dependencies:
     - name: idf
       require: private
@@ -177,7 +177,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.12.7
+    version: 2.12.8
   espressif/esp_ipa:
     component_hash: 31003e536f0d26158e10d7fcf2448b6377ce1148518287d0f34ed3b6c942c6d8
     dependencies:
@@ -471,7 +471,7 @@ dependencies:
       require: private
       version: '>=4.4'
     source:
-      registry_url: https://components.espressif.com/
+      registry_url: https://components.espressif.com
       type: service
     version: 2.14.2
   espressif/knob:
@@ -568,9 +568,8 @@ direct_dependencies:
 - espressif/esp_hosted
 - espressif/esp_lvgl_adapter
 - espressif/esp_wifi_remote
-- espressif/freetype
 - idf
 - lvgl/lvgl
-manifest_hash: 969165978bd9386d2dcf390a89379b25034e38df289ba96ec2cb5237eb95d3e4
+manifest_hash: ccd4d51fd06bb58c929e3bf20269b81a410cc1ff9fed5b5ca81533860f892d77
 target: esp32p4
 version: 2.0.0

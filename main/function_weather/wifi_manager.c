@@ -3,6 +3,7 @@
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
+#include <time.h>
 #include <string.h>
 
 #define TAG "wifi_mgr"
@@ -34,6 +35,8 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         ip_event_got_ip_t *ev = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "获得 IP: " IPSTR, IP2STR(&ev->ip_info.ip));
         s_retry_count = 0;
+
+        // SNTP 初始化已移至 ntp_time.c 统一管理，避免重复初始化导致崩溃
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
@@ -83,4 +86,19 @@ bool wifi_manager_wait_connected(TickType_t timeout_ticks)
     EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group, WIFI_CONNECTED_BIT,
                                            pdFALSE, pdTRUE, timeout_ticks);
     return (bits & WIFI_CONNECTED_BIT) != 0;
+}
+
+bool wifi_manager_wait_sntp_synced(TickType_t timeout_ticks)
+{
+    TickType_t start = xTaskGetTickCount();
+    while ((xTaskGetTickCount() - start) < timeout_ticks) {
+        time_t now = time(NULL);
+        if (now > 1700000000) {
+            ESP_LOGI(TAG, "SNTP 时间同步成功: %ld", (long)now);
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    ESP_LOGE(TAG, "SNTP 时间同步超时");
+    return false;
 }

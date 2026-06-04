@@ -36,6 +36,16 @@ bool wifi_manager_is_connected(void);
 bool wifi_manager_wait_connected(TickType_t timeout_ticks);
 
 /**
+ * @brief 等待 SNTP 时间同步完成（阻塞调用方任务）。
+ *
+ * 在 OSS 签名等需要准确时间的操作之前调用此函数。
+ *
+ * @param timeout_ticks 超时时间（FreeRTOS Tick），建议 pdMS_TO_TICKS(15000)
+ * @return true 时间同步成功；false 超时。
+ */
+bool wifi_manager_wait_sntp_synced(TickType_t timeout_ticks);
+
+/**
  * @brief 获取 Wi-Fi 连接成功事件组 Bit。
  *
  * 可与其他模块的 Event Group 共用。

@@ -7,6 +7,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_lv_adapter.h"
+#include "bsp/esp-bsp.h"
+#include <sys/stat.h>
+#include <errno.h>
 
 static const char *TAG = "screen_ai";
 
@@ -54,6 +57,22 @@ static void chat_add_message(const char *role, const char *text, lv_color_t colo
 static void ai_process_task(void *arg)
 {
     (void)arg;
+
+    // 等待 SNTP 时间同步（OSS 签名需要准确时间）
+    if (!wifi_manager_wait_sntp_synced(pdMS_TO_TICKS(15000))) {
+        ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
+        if (status_label) {
+            lv_label_set_text(status_label, "Time sync failed, please check network");
+            lv_obj_set_style_text_color(status_label, lv_color_hex(0xff4444), 0);
+        }
+        if (chat_box) {
+            chat_add_message("系统", "时间同步失败，请检查网络后重试", lv_color_hex(0xff6b6b));
+        }
+        esp_lv_adapter_unlock();
+        s_processing = false;
+        vTaskDelete(NULL);
+        return;
+    }
 
     char asr_text[512] = {0};
     char ai_reply[1024] = {0};
@@ -180,6 +199,24 @@ void screen_ai_font_init(void)
 #if defined(CONFIG_LV_USE_FREETYPE) && CONFIG_LV_USE_FREETYPE
     if (g_font_ready) return;
 
+    // 1. 检查 SD 卡上字体文件是否存在
+    const char *font_path = BSP_SD_MOUNT_POINT "/simhei.ttf";
+    struct stat st;
+    if (stat(font_path, &st) != 0) {
+        ESP_LOGE(TAG, "Font file not found: %s (errno=%d). "
+                      "Please copy simhei.ttf to SD card root.", font_path, errno);
+        return;
+    }
+    ESP_LOGI(TAG, "Font file found: %s (%ld bytes)", font_path, (long)st.st_size);
+
+    // 2. 初始化 FreeType 引擎（LVGL v9 + LV_FREETYPE_USE_LVGL_PORT 必须调用）
+    lv_result_t ft_ret = lv_freetype_init(1);  // 参数 max_faces: 同步打开的最大字体数
+    if (ft_ret != LV_RESULT_OK) {
+        ESP_LOGE(TAG, "lv_freetype_init() failed: %d", ft_ret);
+        return;
+    }
+
+    // 3. 创建 FreeType 字体
     g_chinese_font = lv_freetype_font_create("S:/simhei.ttf",
                                               LV_FREETYPE_FONT_RENDER_MODE_BITMAP,
                                               24,
@@ -188,7 +225,8 @@ void screen_ai_font_init(void)
         ESP_LOGI(TAG, "FreeType 中文字体加载成功 (24px)");
         g_font_ready = true;
     } else {
-        ESP_LOGW(TAG, "FreeType 字体加载失败，降级为 lv_font_utf_24");
+        ESP_LOGE(TAG, "lv_freetype_font_create() failed. "
+                      "Font: %s, size: 24, mode: BITMAP", font_path);
     }
 #endif
 }

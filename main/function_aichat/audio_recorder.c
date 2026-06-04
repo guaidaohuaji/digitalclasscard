@@ -10,6 +10,8 @@
 #define TAG "audio_recorder"
 
 // ---------- 录音参数 ----------
+// 16kHz 采样率：INMP441 最低 BCLK=1MHz 要求
+// BCLK = 16kHz × 32bit × 2ch = 1.024MHz ✅
 #define SAMPLE_RATE         16000
 #define BITS_PER_SAMPLE     16
 #define CHANNELS            1
@@ -54,11 +56,12 @@ static void rec_task(void *arg)
         if (bytes_read > 0) {
             // INMP441 输出标准 I2S 立体声，每帧 2 个 32-bit 通道 = 8 字节
             // L/R 接地 → 左声道有效，右声道为 0
-            // 取左声道 32-bit 值的低 16 位作为 16-bit PCM 样本
+            // 取左声道 32-bit 值右移 8 位取高 16 位（INMP441 24-bit 左对齐，高 16 位 = 有效音频）
             int frames = bytes_read / 8;
             int16_t mono[256];
             for (int i = 0; i < frames; i++) {
-                mono[i] = (int16_t)(buffer[i * 2] & 0xFFFF);
+                // INMP441 输出 24-bit 左对齐（bits 31:8），>> 16 取高 16 位 → 全动态范围
+                mono[i] = (int16_t)(buffer[i * 2] >> 16);
             }
             size_t mono_bytes = frames * sizeof(int16_t);
             if (s_rec_file && s_recording) {

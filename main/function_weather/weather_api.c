@@ -77,12 +77,8 @@ int weather_fetch_forecast(float lat, float lon,
         .timeout_ms = 15000,
         .event_handler = _http_event_handler,
         .buffer_size = 4096,
-        // ---- Keep-Alive：复用 TLS 连接，避免频繁创建/销毁 socket ----
-        .keep_alive_enable = true,
-        .keep_alive_idle = 10,     // 10s 空闲后发送 Keep-Alive 探测
-        .keep_alive_interval = 5,  // 探测间隔 5s
-        .keep_alive_count = 3,     // 最多 3 次探测
         .crt_bundle_attach = esp_crt_bundle_attach,   // 验证证书
+        .keep_alive_enable = false,  // 每次新建连接，避免复用失效的TLS会话
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&http_cfg);

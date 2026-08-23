@@ -10,22 +10,182 @@
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 
 #define TAG "weather_task"
 
-#define WEATHER_UPDATE_INTERVAL_SEC  1800
-#define TIME_UPDATE_INTERVAL_SEC     1
+#define WEATHER_UPDATE_INTERVAL_SEC 1800
+#define TIME_UPDATE_INTERVAL_SEC    1
+#define CONNECT_RETRY_DELAY_MS      5000
+#define NTP_RETRY_DELAY_MS          10000
+#define WEATHER_RETRY_DELAY_MS      15000
 
-#define SCHOOL_LAT  30.2741f
-#define SCHOOL_LON  120.1551f
+#define SCHOOL_LAT 30.2741f
+#define SCHOOL_LON 120.1551f
 
-// 动态分配，存储 48 条逐小时数据（两天）
 static weather_hourly_t *g_hourly_data = NULL;
 static int g_hourly_count = 0;
 
+static bool same_calendar_day(time_t a, time_t b)
+{
+    struct tm ta, tb;
+    localtime_r(&a, &ta);
+    localtime_r(&b, &tb);
+    return ta.tm_year == tb.tm_year && ta.tm_yday == tb.tm_yday;
+}
+
+static int collect_day_indices(time_t day_ref, int *indices, int max_indices)
+{
+    int count = 0;
+    for (int i = 0; i < g_hourly_count && count < max_indices; i++) {
+        if (same_calendar_day((time_t)g_hourly_data[i].timestamp, day_ref)) {
+            indices[count++] = i;
+        }
+    }
+    return count;
+}
+
+static int nearest_index_for_hour(const int *indices, int count, int target_hour)
+{
+    if (count <= 0) return -1;
+    int best = indices[0];
+    int best_diff = 100;
+    for (int i = 0; i < count; i++) {
+        struct tm ti;
+        time_t ts = (time_t)g_hourly_data[indices[i]].timestamp;
+        localtime_r(&ts, &ti);
+        int diff = abs(ti.tm_hour - target_hour);
+        if (diff < best_diff) {
+            best_diff = diff;
+            best = indices[i];
+        }
+    }
+    return best;
+}
+
+static void build_day_ui_data(time_t day_ref,
+                              int temps[8], const char *descs[8], const char *times[8],
+                              char time_buf[8][6], char date_buf[16],
+                              int *highlight_idx, bool highlight_current_time)
+{
+    int indices[24];
+    int count = collect_day_indices(day_ref, indices, 24);
+    const int target_hours[8] = {0, 3, 6, 9, 12, 15, 18, 21};
+
+    for (int i = 0; i < 8; i++) {
+        int idx = nearest_index_for_hour(indices, count, target_hours[i]);
+        if (idx < 0) {
+            temps[i] = 0;
+            descs[i] = "--";
+            snprintf(time_buf[i], 6, "--:--");
+            times[i] = time_buf[i];
+            continue;
+        }
+
+        temps[i] = (int)roundf(g_hourly_data[idx].temp);
+        descs[i] = g_hourly_data[idx].desc;
+
+        struct tm ti;
+        time_t ts = (time_t)g_hourly_data[idx].timestamp;
+        localtime_r(&ts, &ti);
+        snprintf(time_buf[i], 6, "%02d:%02d", ti.tm_hour, ti.tm_min);
+        times[i] = time_buf[i];
+    }
+
+    struct tm td;
+    localtime_r(&day_ref, &td);
+    strftime(date_buf, 16, "%m-%d", &td);
+
+    if (highlight_idx) {
+        *highlight_idx = 0;
+        if (highlight_current_time && count > 0) {
+            time_t now = time(NULL);
+            time_t min_diff = labs((long)((time_t)g_hourly_data[nearest_index_for_hour(indices, count, target_hours[0])].timestamp - now));
+            for (int i = 1; i < 8; i++) {
+                int idx = nearest_index_for_hour(indices, count, target_hours[i]);
+                if (idx < 0) continue;
+                time_t diff = labs((long)((time_t)g_hourly_data[idx].timestamp - now));
+                if (diff < min_diff) {
+                    min_diff = diff;
+                    *highlight_idx = i;
+                }
+            }
+        }
+    }
+}
+
+static bool wait_for_wifi_forever(void)
+{
+    while (!wifi_manager_is_connected()) {
+        ESP_LOGW(TAG, "等待 Wi-Fi 连接...");
+        if (wifi_manager_wait_connected(pdMS_TO_TICKS(10000))) return true;
+        vTaskDelay(pdMS_TO_TICKS(CONNECT_RETRY_DELAY_MS));
+    }
+    return true;
+}
+
+static bool ensure_time_synced(void)
+{
+    if (time(NULL) > 1700000000) return true;
+
+    while (1) {
+        if (!wait_for_wifi_forever()) continue;
+        ESP_LOGI(TAG, "开始 NTP 时间同步...");
+        if (ntp_time_sync(30)) return true;
+        ESP_LOGW(TAG, "NTP 同步失败，%d ms 后重试", NTP_RETRY_DELAY_MS);
+        vTaskDelay(pdMS_TO_TICKS(NTP_RETRY_DELAY_MS));
+    }
+}
+
+static bool fetch_weather_with_retry(void)
+{
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        if (!wait_for_wifi_forever()) continue;
+        int ret = weather_fetch_forecast(SCHOOL_LAT, SCHOOL_LON,
+                                         g_hourly_data, 48, &g_hourly_count);
+        if (ret == 0 && g_hourly_count > 0) return true;
+
+        ESP_LOGE(TAG, "获取天气失败，尝试 %d/3，错误码=%d", attempt, ret);
+        if (attempt < 3) vTaskDelay(pdMS_TO_TICKS(WEATHER_RETRY_DELAY_MS));
+    }
+    return false;
+}
+
+static void update_forecast_ui(void)
+{
+    time_t now_ts = time(NULL);
+    struct tm now_tm;
+    localtime_r(&now_ts, &now_tm);
+
+    struct tm tomorrow_tm = now_tm;
+    tomorrow_tm.tm_mday += 1;
+    tomorrow_tm.tm_hour = 12;
+    tomorrow_tm.tm_min = 0;
+    tomorrow_tm.tm_sec = 0;
+    time_t tomorrow_ts = mktime(&tomorrow_tm);
+
+    int today_temps[8], tomorrow_temps[8];
+    const char *today_descs[8], *tomorrow_descs[8];
+    const char *today_times[8], *tomorrow_times[8];
+    char today_time_buf[8][6], tomorrow_time_buf[8][6];
+    char today_date[16], tomorrow_date[16];
+    int highlight = 0;
+
+    build_day_ui_data(now_ts,
+                      today_temps, today_descs, today_times,
+                      today_time_buf, today_date, &highlight, true);
+    build_day_ui_data(tomorrow_ts,
+                      tomorrow_temps, tomorrow_descs, tomorrow_times,
+                      tomorrow_time_buf, tomorrow_date, NULL, false);
+
+    ui_update_today_forecast(today_temps, today_descs, today_times, today_date, highlight);
+    ui_update_tomorrow_forecast(tomorrow_temps, tomorrow_descs, tomorrow_times, tomorrow_date);
+
+    ESP_LOGI(TAG, "天气 UI 已按本地自然日更新，highlight=%d", highlight);
+}
+
 static void weather_task(void *pvParameters)
 {
-    // 分配 48 条预报数据的空间（两天逐小时）
     g_hourly_data = (weather_hourly_t *)malloc(sizeof(weather_hourly_t) * 48);
     if (!g_hourly_data) {
         ESP_LOGE(TAG, "无法分配天气预报缓冲区");
@@ -33,146 +193,49 @@ static void weather_task(void *pvParameters)
         return;
     }
 
-    // ---- 等待 Wi‑Fi 连接 ----
-    ESP_LOGI(TAG, "等待 Wi‑Fi 连接...");
-    if (!wifi_manager_wait_connected(pdMS_TO_TICKS(60000))) {
-        ESP_LOGE(TAG, "Wi‑Fi 连接超时，任务退出");
-        free(g_hourly_data);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    // ---- 同步 NTP ----
-    ESP_LOGI(TAG, "开始 NTP 时间同步...");
-    if (!ntp_time_sync(60)) {
-        ESP_LOGE(TAG, "NTP 同步失败，任务退出");
-        free(g_hourly_data);
-        vTaskDelete(NULL);
-        return;
-    }
+    wait_for_wifi_forever();
+    ensure_time_synced();
 
     TickType_t last_weather_update = 0;
-    TickType_t last_time_update    = 0;
+    TickType_t last_time_update = 0;
 
     while (1) {
-        TickType_t now = xTaskGetTickCount();
-
         if (!wifi_manager_is_connected()) {
-            ESP_LOGW(TAG, "Wi‑Fi 断开，等待重连...");
-            wifi_manager_wait_connected(portMAX_DELAY);
+            ESP_LOGW(TAG, "Wi-Fi 断开，等待恢复...");
+            wait_for_wifi_forever();
             last_weather_update = 0;
-            last_time_update = 0;
         }
 
-        // 获取天气（带重试）
-        if ((now - last_weather_update) > pdMS_TO_TICKS(WEATHER_UPDATE_INTERVAL_SEC * 1000)
-            || last_weather_update == 0) {
+        if (time(NULL) <= 1700000000) {
+            ensure_time_synced();
+        }
 
-            int ret = -1;
-            int retry = 0;
-            while (retry < 3 && ret != 0) {
-                ret = weather_fetch_forecast(SCHOOL_LAT, SCHOOL_LON,
-                                             g_hourly_data, 48, &g_hourly_count);
-                if (ret != 0) {
-                    // 等待 65s 确保 TIME_WAIT 回收完毕（配合 MSL=15s 可缩短至 20s+，但保守起见保持 65s）
-                    ESP_LOGE(TAG, "获取天气失败，重试 %d/3（65s 后），错误码: %d", retry + 1, ret);
-                    vTaskDelay(pdMS_TO_TICKS(65000));
-                    retry++;
-                }
-            }
+        TickType_t now_tick = xTaskGetTickCount();
 
-            if (ret == 0 && g_hourly_count > 0) {
-                // 拆分为今天和明天各 8 个点（每 3 小时取一个）
-                int today_temps[8], tomorrow_temps[8];
-                const char *today_descs[8], *tomorrow_descs[8];
-                const char *today_times[8], *tomorrow_times[8];
-                char today_time_buf[8][6], tomorrow_time_buf[8][6];
-
-                int step = 3;  // 逐小时数据，间隔 3 小时取点
-                // 今天数据：索引 0~23，取 i*step
-                for (int i = 0; i < 8; i++) {
-                    int idx = i * step;
-                    if (idx >= g_hourly_count) idx = g_hourly_count - 1;
-                    today_temps[i] = (int)roundf(g_hourly_data[idx].temp);
-                    today_descs[i] = g_hourly_data[idx].desc;
-                    time_t t = (time_t)g_hourly_data[idx].timestamp;
-                    struct tm tm_info;
-                    localtime_r(&t, &tm_info);
-                    snprintf(today_time_buf[i], sizeof(today_time_buf[i]), "%02d:%02d",
-                             tm_info.tm_hour, tm_info.tm_min);
-                    today_times[i] = today_time_buf[i];
-                }
-                // 明天数据：索引从第24小时开始（0~23是今天，24~47是明天）
-                int tomorrow_start = step * 8;  // = 24（如果有完整48条）
-                if (tomorrow_start >= g_hourly_count) {
-                    tomorrow_start = g_hourly_count / 2;  // 数据不够时折半
-                }
-                for (int i = 0; i < 8; i++) {
-                    int idx = tomorrow_start + i * step;
-                    if (idx >= g_hourly_count) idx = g_hourly_count - 1;
-                    tomorrow_temps[i] = (int)roundf(g_hourly_data[idx].temp);
-                    tomorrow_descs[i] = g_hourly_data[idx].desc;
-                    time_t t = (time_t)g_hourly_data[idx].timestamp;
-                    struct tm tm_info;
-                    localtime_r(&t, &tm_info);
-                    snprintf(tomorrow_time_buf[i], sizeof(tomorrow_time_buf[i]), "%02d:%02d",
-                             tm_info.tm_hour, tm_info.tm_min);
-                    tomorrow_times[i] = tomorrow_time_buf[i];
-                }
-
-                if (g_hourly_count < 16) {
-                    ESP_LOGW(TAG, "警告：只获取到 %d 条数据，预计少于48条，UI可能不完整", g_hourly_count);
-                }
-
-                // 计算今天和明天的日期
-                time_t today_ts = (time_t)g_hourly_data[0].timestamp;
-                int tomorrow_idx = step * 8;
-                if (tomorrow_idx >= g_hourly_count) tomorrow_idx = g_hourly_count - 1;
-                time_t tomorrow_ts = (time_t)g_hourly_data[tomorrow_idx].timestamp;
-                struct tm tm_today, tm_tomorrow;
-                localtime_r(&today_ts, &tm_today);
-                localtime_r(&tomorrow_ts, &tm_tomorrow);
-                char today_date[16], tomorrow_date[16];
-                strftime(today_date, sizeof(today_date), "%m-%d", &tm_today);
-                strftime(tomorrow_date, sizeof(tomorrow_date), "%m-%d", &tm_tomorrow);
-
-                // 寻找今天高亮索引（距离当前时间最近的点）
-                time_t now_ts = time(NULL);
-                int highlight = 0;
-                time_t min_diff = (time_t)abs((int)(g_hourly_data[0].timestamp - now_ts));
-                for (int i = 1; i < 8; i++) {
-                    int idx = i * step;
-                    if (idx >= g_hourly_count) break;
-                    time_t diff = (time_t)abs((int)(g_hourly_data[idx].timestamp - now_ts));
-                    if (diff < min_diff) {
-                        min_diff = diff;
-                        highlight = i;
-                    }
-                }
-                ESP_LOGI(TAG, "highlight index = %d", highlight);
-                // 更新 UI
-                ui_update_today_forecast(today_temps, today_descs, today_times, today_date, highlight);
-                ui_update_tomorrow_forecast(tomorrow_temps, tomorrow_descs, tomorrow_times, tomorrow_date);
-
-                ESP_LOGI(TAG, "天气数据已更新（今天 %d 点，明天 %d 点）", 8, 8);
+        if (last_weather_update == 0 ||
+            (now_tick - last_weather_update) >= pdMS_TO_TICKS(WEATHER_UPDATE_INTERVAL_SEC * 1000)) {
+            if (fetch_weather_with_retry()) {
+                update_forecast_ui();
+                last_weather_update = xTaskGetTickCount();
             } else {
-                ESP_LOGE(TAG, "获取天气数据最终失败，错误码: %d", ret);
+                ESP_LOGW(TAG, "本轮天气更新失败，将在 60 秒后再次尝试");
+                vTaskDelay(pdMS_TO_TICKS(60000));
+                last_weather_update = 0;
             }
-            last_weather_update = now;
         }
 
-        // 更新时钟
-        if ((now - last_time_update) > pdMS_TO_TICKS(TIME_UPDATE_INTERVAL_SEC * 1000)
-            || last_time_update == 0) {
+        now_tick = xTaskGetTickCount();
+        if (last_time_update == 0 ||
+            (now_tick - last_time_update) >= pdMS_TO_TICKS(TIME_UPDATE_INTERVAL_SEC * 1000)) {
             char time_buf[16], date_buf[16];
             ntp_get_time_str(time_buf, sizeof(time_buf));
             ntp_get_date_str(date_buf, sizeof(date_buf));
             ui_update_weather_time(time_buf);
             ui_update_weather_date(date_buf);
-            last_time_update = now;
+            last_time_update = now_tick;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
 

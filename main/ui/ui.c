@@ -1,7 +1,11 @@
 #include "ui.h"
 #include "lvgl.h"
 #include "esp_lv_adapter.h"
+#include "camera_preview.h"
+#include "esp_log.h"
 #include <stdio.h>
+
+#define TAG "ui"
 
 static lv_display_t *g_disp = NULL;
 
@@ -29,16 +33,22 @@ void ui_init(lv_display_t *disp)
 
 void ui_show_weather(void)
 {
+    camera_preview_stop();
     lv_screen_load_anim(scr_weather, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
 }
 
 void ui_show_face(void)
 {
     lv_screen_load_anim(scr_face, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
+    esp_err_t ret = camera_preview_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "camera_preview_start failed: %s", esp_err_to_name(ret));
+    }
 }
 
 void ui_show_ai(void)
 {
+    camera_preview_stop();
     lv_screen_load_anim(scr_ai, LV_SCR_LOAD_ANIM_MOVE_LEFT, 300, 0, false);
 }
 
@@ -74,12 +84,10 @@ void ui_update_today_forecast(int temps[], const char *descs[], const char *time
 {
     esp_lv_adapter_lock(-1);
 
-    // 更新日期
     if (g_today_date_label) {
         lv_label_set_text(g_today_date_label, date_str);
     }
 
-    // 更新8个标签
     for (int i = 0; i < 8; i++) {
         if (g_today_labels[i]) {
             char buf[64];
@@ -89,7 +97,6 @@ void ui_update_today_forecast(int temps[], const char *descs[], const char *time
                      descs[i] ? descs[i] : "--");
             lv_label_set_text(g_today_labels[i], buf);
 
-            // 高亮处理
             if (i == highlight_idx) {
                 lv_obj_set_style_bg_color(g_today_labels[i], lv_color_hex(0x16213e), 0);
                 lv_obj_set_style_text_color(g_today_labels[i], lv_color_hex(0xffd700), 0);
@@ -108,12 +115,10 @@ void ui_update_tomorrow_forecast(int temps[], const char *descs[], const char *t
 {
     esp_lv_adapter_lock(-1);
 
-    // 更新日期
     if (g_tomorrow_date_label) {
         lv_label_set_text(g_tomorrow_date_label, date_str);
     }
 
-    // 更新8个标签，明天全部不高亮
     for (int i = 0; i < 8; i++) {
         if (g_tomorrow_labels[i]) {
             char buf[64];
@@ -123,7 +128,6 @@ void ui_update_tomorrow_forecast(int temps[], const char *descs[], const char *t
                      descs[i] ? descs[i] : "--");
             lv_label_set_text(g_tomorrow_labels[i], buf);
 
-            // 统一默认样式
             lv_obj_set_style_bg_color(g_tomorrow_labels[i], lv_color_hex(0x16213e), 0);
             lv_obj_set_style_text_color(g_tomorrow_labels[i], lv_color_hex(0xcccccc), 0);
         }

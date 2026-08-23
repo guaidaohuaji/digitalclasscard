@@ -22,7 +22,7 @@
 #define PREVIEW_WIDTH       640
 #define PREVIEW_HEIGHT      360
 #define PREVIEW_BPP         2
-#define PREVIEW_TASK_STACK  (6 * 1024)
+#define PREVIEW_TASK_STACK  (8 * 1024)
 #define PREVIEW_TASK_PRIO   6
 #define ALIGN_UP(num, align) (((num) + ((align) - 1)) & ~((align) - 1))
 
@@ -33,13 +33,11 @@ typedef struct {
 
 static lv_obj_t *s_canvas = NULL;
 static lv_obj_t *s_status = NULL;
-
 static bool s_camera_initialized = false;
 static volatile bool s_running = false;
 static volatile bool s_stop_requested = false;
 static TaskHandle_t s_task = NULL;
 static int s_fd = -1;
-
 static capture_buf_t s_capture[CAPTURE_BUF_COUNT];
 static uint8_t *s_preview_buf[CAPTURE_BUF_COUNT] = {0};
 static size_t s_preview_buf_size = 0;
@@ -70,11 +68,11 @@ static void cleanup_capture_buffers(void)
 
 static void close_video(void)
 {
+    cleanup_capture_buffers();
     if (s_fd >= 0) {
         close(s_fd);
         s_fd = -1;
     }
-    cleanup_capture_buffers();
 }
 
 static esp_err_t ensure_camera_initialized(void)
@@ -247,6 +245,21 @@ static esp_err_t scale_to_preview(const uint8_t *src, uint32_t src_w, uint32_t s
 static void preview_task(void *arg)
 {
     (void)arg;
+    bool stream_on = false;
+
+    ui_set_status("正在启动摄像头...", 0xaaaaaa);
+
+    esp_err_t ret = ensure_camera_initialized();
+    if (ret != ESP_OK || s_stop_requested) {
+        if (ret != ESP_OK) ui_set_status("摄像头初始化失败", 0xff4444);
+        goto exit_task;
+    }
+
+    ret = open_and_configure_video();
+    if (ret != ESP_OK || s_stop_requested) {
+        if (ret != ESP_OK) ui_set_status("无法打开摄像头，请检查模组", 0xff4444);
+        goto exit_task;
+    }
 
     struct v4l2_format fmt = {0};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -260,6 +273,7 @@ static void preview_task(void *arg)
         ui_set_status("摄像头启动失败", 0xff4444);
         goto exit_task;
     }
+    stream_on = true;
 
     ui_set_status("摄像头已开启，请面向摄像头", 0x81c784);
 
@@ -276,9 +290,9 @@ static void preview_task(void *arg)
 
         if (buf.index < CAPTURE_BUF_COUNT) {
             uint8_t *dst = s_preview_buf[buf.index];
-            esp_err_t ret = scale_to_preview((const uint8_t *)s_capture[buf.index].addr,
-                                             fmt.fmt.pix.width, fmt.fmt.pix.height,
-                                             dst, s_preview_buf_size);
+            ret = scale_to_preview((const uint8_t *)s_capture[buf.index].addr,
+                                   fmt.fmt.pix.width, fmt.fmt.pix.height,
+                                   dst, s_preview_buf_size);
             if (ret == ESP_OK && s_canvas && !s_stop_requested) {
                 if (esp_lv_adapter_lock(-1) == ESP_OK) {
                     lv_canvas_set_buffer(s_canvas, dst, PREVIEW_WIDTH, PREVIEW_HEIGHT, s_lv_fmt);
@@ -294,9 +308,11 @@ static void preview_task(void *arg)
         }
     }
 
-    ioctl(s_fd, VIDIOC_STREAMOFF, &type);
-
 exit_task:
+    if (stream_on && s_fd >= 0) {
+        int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ioctl(s_fd, VIDIOC_STREAMOFF, &type);
+    }
     close_video();
     s_running = false;
     s_stop_requested = false;
@@ -314,22 +330,7 @@ void camera_preview_bind_ui(lv_obj_t *canvas, lv_obj_t *status_label)
 esp_err_t camera_preview_start(void)
 {
     if (s_running) return ESP_OK;
-    if (s_stop_requested) return ESP_ERR_INVALID_STATE;
     if (!s_canvas) return ESP_ERR_INVALID_STATE;
-
-    ui_set_status("正在启动摄像头...", 0xaaaaaa);
-
-    esp_err_t ret = ensure_camera_initialized();
-    if (ret != ESP_OK) {
-        ui_set_status("摄像头初始化失败", 0xff4444);
-        return ret;
-    }
-
-    ret = open_and_configure_video();
-    if (ret != ESP_OK) {
-        ui_set_status("无法打开摄像头，请检查模组", 0xff4444);
-        return ret;
-    }
 
     s_stop_requested = false;
     s_running = true;
@@ -338,8 +339,6 @@ esp_err_t camera_preview_start(void)
                                             PREVIEW_TASK_PRIO, &s_task, 0);
     if (ok != pdPASS) {
         s_running = false;
-        close_video();
-        ui_set_status("摄像头任务创建失败", 0xff4444);
         return ESP_ERR_NO_MEM;
     }
 

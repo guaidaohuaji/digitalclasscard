@@ -14,11 +14,13 @@ idf_component_register(
         function_weather/wifi_manager.c
         function_aichat/audio_recorder.c
         function_aichat/ai_chat_api.c
+        function_face/camera_preview.c
     INCLUDE_DIRS
         .
         ui
         function_weather
         function_aichat
+        function_face
 )
 
 idf_component_get_property(LVGL_LIB lvgl__lvgl COMPONENT_LIB)

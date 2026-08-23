@@ -11,23 +11,20 @@
 
 static const char *TAG = "screen_ai";
 
-static lv_obj_t *status_label = NULL; // 底部状态标签
-static lv_obj_t *chat_box = NULL;     // 对话框容器
-static lv_obj_t *rec_bar = NULL;      // 录音进度条
-static lv_obj_t *rec_time_label = NULL; // 录音时间标签
-static lv_timer_t *rec_timer = NULL;  // 录音进度刷新定时器
-static uint32_t    rec_start_ms = 0;   // 录音开始时刻 (ms)
-static bool        s_processing = false; // 防止重复处理
+static lv_obj_t *status_label = NULL;
+static lv_obj_t *chat_box = NULL;
+static lv_obj_t *rec_bar = NULL;
+static lv_obj_t *rec_time_label = NULL;
+static lv_timer_t *rec_timer = NULL;
+static uint32_t rec_start_ms = 0;
+static bool s_processing = false;
+static bool s_recording_active = false;
 
-// 前向声明
 static void rec_timer_cb(lv_timer_t *timer);
 
-// 向对话框添加一条文字
 static void chat_add_message(const char *role, const char *text, lv_color_t color)
 {
     if (!chat_box) return;
-
-    // 创建消息容器
     lv_obj_t *msg = lv_obj_create(chat_box);
     lv_obj_set_width(msg, LV_PCT(100));
     lv_obj_set_height(msg, LV_SIZE_CONTENT);
@@ -35,7 +32,6 @@ static void chat_add_message(const char *role, const char *text, lv_color_t colo
     lv_obj_set_style_border_width(msg, 0, 0);
     lv_obj_set_style_pad_all(msg, 5, 0);
 
-    // 文字标签
     lv_obj_t *label = lv_label_create(msg);
     lv_label_set_text_fmt(label, "[%s] %s", role, text);
     lv_obj_set_style_text_color(label, color, 0);
@@ -43,21 +39,17 @@ static void chat_add_message(const char *role, const char *text, lv_color_t colo
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
 }
 
-// AI 处理任务 (在单独任务中执行，避免阻塞 LVGL)
 static void ai_process_task(void *arg)
 {
     (void)arg;
 
-    // 等待 SNTP 时间同步（OSS 签名需要准确时间）
     if (!wifi_manager_wait_sntp_synced(pdMS_TO_TICKS(15000))) {
         ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
         if (status_label) {
             lv_label_set_text(status_label, "Time sync failed, please check network");
             lv_obj_set_style_text_color(status_label, lv_color_hex(0xff4444), 0);
         }
-        if (chat_box) {
-            chat_add_message("系统", "时间同步失败，请检查网络后重试", lv_color_hex(0xff6b6b));
-        }
+        if (chat_box) chat_add_message("系统", "时间同步失败，请检查网络后重试", lv_color_hex(0xff6b6b));
         esp_lv_adapter_unlock();
         s_processing = false;
         vTaskDelete(NULL);
@@ -66,20 +58,10 @@ static void ai_process_task(void *arg)
 
     char asr_text[512] = {0};
     char ai_reply[1024] = {0};
+    esp_err_t ret = ai_chat_process("/sdcard/ai_record.wav", asr_text, sizeof(asr_text), ai_reply, sizeof(ai_reply));
 
-    // 调用 AI 处理
-    esp_err_t ret = ai_chat_process(
-        "/sdcard/ai_record.wav",
-        asr_text, sizeof(asr_text),
-        ai_reply, sizeof(ai_reply)
-    );
-
-    // LVGL 非线程安全，必须加锁
     ESP_ERROR_CHECK(esp_lv_adapter_lock(-1));
-
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "你说: %s", asr_text);
-        ESP_LOGI(TAG, "小班: %s", ai_reply);
         if (status_label) {
             lv_label_set_text(status_label, "Hold button to start speaking");
             lv_obj_set_style_text_color(status_label, lv_color_hex(0xaaaaaa), 0);
@@ -89,106 +71,99 @@ static void ai_process_task(void *arg)
             chat_add_message("小班", ai_reply, lv_color_hex(0xa5d6a7));
         }
     } else {
-        ESP_LOGE(TAG, "AI 处理失败 (err=%d): %s", ret, ai_reply);
         if (status_label) {
             lv_label_set_text(status_label, "Failed, please retry");
             lv_obj_set_style_text_color(status_label, lv_color_hex(0xff4444), 0);
         }
-        if (chat_box) {
-            chat_add_message("系统", ai_reply, lv_color_hex(0xff6b6b));
-        }
+        if (chat_box) chat_add_message("系统", ai_reply, lv_color_hex(0xff6b6b));
     }
-
     esp_lv_adapter_unlock();
 
     s_processing = false;
     vTaskDelete(NULL);
 }
 
-// 按下录音按钮
 static void mic_press_cb(lv_event_t *e)
 {
-    if (s_processing) return;
-    audio_recorder_start("/sdcard/ai_record.wav");
+    if (s_processing || s_recording_active) return;
+
+    esp_err_t ret = audio_recorder_start("/sdcard/ai_record.wav");
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Recording start failed: %s", esp_err_to_name(ret));
+        if (status_label) {
+            lv_label_set_text(status_label, "录音启动失败，请检查SD卡和麦克风");
+            lv_obj_set_style_text_color(status_label, lv_color_hex(0xff4444), 0);
+        }
+        if (chat_box) chat_add_message("系统", "录音启动失败，请检查SD卡和麦克风", lv_color_hex(0xff6b6b));
+        return;
+    }
+
+    s_recording_active = true;
     if (status_label) {
         lv_label_set_text(status_label, "● Recording...");
         lv_obj_set_style_text_color(status_label, lv_color_hex(0xff4444), 0);
     }
-    // 显示进度条并启动定时器
-    if (rec_bar) lv_obj_clear_flag(rec_bar, LV_OBJ_FLAG_HIDDEN);
-    if (rec_time_label) lv_obj_clear_flag(rec_time_label, LV_OBJ_FLAG_HIDDEN);
-    rec_start_ms = lv_tick_get();
-    if (!rec_timer) {
-        rec_timer = lv_timer_create(rec_timer_cb, 200, NULL);
-    } else {
-        lv_timer_resume(rec_timer);
+    if (rec_bar) {
+        lv_bar_set_value(rec_bar, 0, LV_ANIM_OFF);
+        lv_obj_clear_flag(rec_bar, LV_OBJ_FLAG_HIDDEN);
     }
-    ESP_LOGI(TAG, "Recording started");
+    if (rec_time_label) {
+        lv_label_set_text(rec_time_label, "0s / 60s");
+        lv_obj_clear_flag(rec_time_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    rec_start_ms = lv_tick_get();
+    if (!rec_timer) rec_timer = lv_timer_create(rec_timer_cb, 200, NULL);
+    else lv_timer_resume(rec_timer);
 }
 
-// 松开录音按钮
 static void mic_release_cb(lv_event_t *e)
 {
-    if (s_processing) return;
+    if (s_processing || !s_recording_active) return;
+
     audio_recorder_stop();
+    s_recording_active = false;
     s_processing = true;
 
-    // WiFi 连接检查
+    if (rec_timer) lv_timer_pause(rec_timer);
+    if (rec_bar) lv_obj_add_flag(rec_bar, LV_OBJ_FLAG_HIDDEN);
+    if (rec_time_label) lv_obj_add_flag(rec_time_label, LV_OBJ_FLAG_HIDDEN);
+
     if (!wifi_manager_is_connected()) {
-        ESP_LOGE(TAG, "WiFi 未连接，无法进行 AI 处理");
         if (status_label) {
             lv_label_set_text(status_label, "WiFi 未连接，请检查网络");
             lv_obj_set_style_text_color(status_label, lv_color_hex(0xff4444), 0);
         }
-        if (chat_box) {
-            chat_add_message("系统", "WiFi 未连接，请检查网络后重试", lv_color_hex(0xff6b6b));
-        }
+        if (chat_box) chat_add_message("系统", "WiFi 未连接，请检查网络后重试", lv_color_hex(0xff6b6b));
         s_processing = false;
         return;
     }
-
-    // 停止录音进度定时器并隐藏进度条
-    if (rec_timer) lv_timer_pause(rec_timer);
-    if (rec_bar) lv_obj_add_flag(rec_bar, LV_OBJ_FLAG_HIDDEN);
-    if (rec_time_label) lv_obj_add_flag(rec_time_label, LV_OBJ_FLAG_HIDDEN);
 
     if (status_label) {
         lv_label_set_text(status_label, "思考中...");
         lv_obj_set_style_text_color(status_label, lv_color_hex(0xffaa00), 0);
     }
-    ESP_LOGI(TAG, "Recording stopped, starting AI processing");
     xTaskCreate(ai_process_task, "ai_task", 12288, NULL, 5, NULL);
 }
 
-// 录音进度刷新定时器回调
 static void rec_timer_cb(lv_timer_t *timer)
 {
     uint32_t elapsed = lv_tick_get() - rec_start_ms;
     uint32_t seconds = elapsed / 1000;
-    uint32_t max_seconds = 60;  // 与 audio_recorder.c 的 MAX_RECORD_SECONDS 保持一致
+    uint32_t max_seconds = 60;
     int32_t progress = (seconds < max_seconds) ? (int32_t)(seconds * 100 / max_seconds) : 100;
-
-    if (rec_time_label) {
-        lv_label_set_text_fmt(rec_time_label, "%lus / %lus", seconds, max_seconds);
-    }
-    if (rec_bar) {
-        lv_bar_set_value(rec_bar, progress, LV_ANIM_ON);
-    }
+    if (rec_time_label) lv_label_set_text_fmt(rec_time_label, "%lus / %lus", seconds, max_seconds);
+    if (rec_bar) lv_bar_set_value(rec_bar, progress, LV_ANIM_ON);
 }
 
-// 返回按钮
 static void btn_back_cb(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        ui_show_weather();
-    }
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) ui_show_weather();
 }
 
 void screen_ai_create(lv_obj_t *scr)
 {
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x1a1a2e), 0);
 
-    // -------- 顶部栏 --------
     lv_obj_t *header = lv_obj_create(scr);
     lv_obj_set_size(header, 1024, 80);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
@@ -211,7 +186,6 @@ void screen_ai_create(lv_obj_t *scr)
     lv_obj_set_style_text_font(title, &lv_font_utf_24, 0);
     lv_obj_center(title);
 
-    // -------- 对话框 --------
     chat_box = lv_obj_create(scr);
     lv_obj_set_size(chat_box, 900, 380);
     lv_obj_align(chat_box, LV_ALIGN_CENTER, 0, -40);
@@ -225,7 +199,6 @@ void screen_ai_create(lv_obj_t *scr)
     lv_obj_set_style_text_color(chat_hint, lv_color_hex(0x666666), 0);
     lv_obj_set_style_text_font(chat_hint, &lv_font_utf_24, 0);
 
-    // -------- 录音进度条区域 (默认隐藏) --------
     rec_bar = lv_bar_create(scr);
     lv_obj_set_size(rec_bar, 500, 10);
     lv_obj_align(rec_bar, LV_ALIGN_BOTTOM_MID, 0, -100);
@@ -242,7 +215,6 @@ void screen_ai_create(lv_obj_t *scr)
     lv_obj_set_style_text_font(rec_time_label, &lv_font_utf_24, 0);
     lv_obj_add_flag(rec_time_label, LV_OBJ_FLAG_HIDDEN);
 
-    // -------- 底部输入区域 --------
     lv_obj_t *bottom = lv_obj_create(scr);
     lv_obj_set_size(bottom, 900, 70);
     lv_obj_align(bottom, LV_ALIGN_BOTTOM_MID, 0, -20);
@@ -259,14 +231,12 @@ void screen_ai_create(lv_obj_t *scr)
     lv_obj_center(mic_label);
     lv_obj_set_style_text_font(mic_label, &lv_font_utf_24, 0);
 
-    // 状态提示
     status_label = lv_label_create(bottom);
     lv_label_set_text(status_label, "Hold button to start speaking");
     lv_obj_set_style_text_color(status_label, lv_color_hex(0xaaaaaa), 0);
     lv_obj_align(status_label, LV_ALIGN_LEFT_MID, 10, 0);
     lv_obj_set_style_text_font(status_label, &lv_font_utf_24, 0);
 
-    // 绑定录音按钮事件
     lv_obj_add_event_cb(mic_btn, mic_press_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(mic_btn, mic_release_cb, LV_EVENT_RELEASED, NULL);
 }

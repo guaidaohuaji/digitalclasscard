@@ -1,6 +1,8 @@
 build/
 managed_components/
 dependencies.lock.old
+sdkconfig
+sdkconfig.old
 
 # 私有配置文件（含 API Key 等敏感信息）
 *_private.h

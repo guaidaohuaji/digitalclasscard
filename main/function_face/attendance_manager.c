@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <errno.h>
 
 #define TAG "attendance"
 
@@ -21,8 +22,12 @@
 #define ATTENDANCE_CACHE_SIZE   32
 #define DUP_NOTICE_INTERVAL_SEC 2
 
-#define USERS_FILE_PATH      BSP_SD_MOUNT_POINT "/face_users.csv"
-#define ATTENDANCE_FILE_PATH BSP_SD_MOUNT_POINT "/attendance.csv"
+/* Keep these names FAT 8.3 compatible. This makes attendance storage work
+ * even when CONFIG_FATFS_LFN_* is not enabled in an already-generated
+ * sdkconfig. Long-file-name support is also enabled in sdkconfig.defaults
+ * for future files. */
+#define USERS_FILE_PATH      BSP_SD_MOUNT_POINT "/users.csv"
+#define ATTENDANCE_FILE_PATH BSP_SD_MOUNT_POINT "/attend.csv"
 
 typedef enum {
     ATTENDANCE_MSG_RECOGNIZED = 0,
@@ -73,6 +78,13 @@ static void sanitize_csv_text(char *text)
     }
 }
 
+static void log_file_error(const char *action, const char *path)
+{
+    int err = errno;
+    ESP_LOGE(TAG, "%s %s failed: errno=%d (%s)",
+             action, path, err, strerror(err));
+}
+
 static esp_err_t ensure_file_header(const char *path, const char *header)
 {
     struct stat st = {0};
@@ -80,18 +92,23 @@ static esp_err_t ensure_file_header(const char *path, const char *header)
         return ESP_OK;
     }
 
+    errno = 0;
     FILE *f = fopen(path, "wb");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to create %s", path);
+        log_file_error("Create", path);
         return ESP_FAIL;
     }
 
     if (fputs(header, f) < 0) {
+        log_file_error("Write header to", path);
         fclose(f);
         return ESP_FAIL;
     }
 
-    fclose(f);
+    if (fclose(f) != 0) {
+        log_file_error("Close", path);
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 
@@ -108,8 +125,12 @@ static bool lookup_name(uint16_t id, char *out, size_t out_size)
         return false;
     }
 
+    errno = 0;
     FILE *f = fopen(USERS_FILE_PATH, "rb");
-    if (!f) return false;
+    if (!f) {
+        log_file_error("Open", USERS_FILE_PATH);
+        return false;
+    }
 
     char line[128];
     while (fgets(line, sizeof(line), f) != NULL) {
@@ -144,16 +165,23 @@ static esp_err_t ensure_user_profile(uint16_t id)
     default_name(id, name, sizeof(name));
     sanitize_csv_text(name);
 
+    errno = 0;
     FILE *f = fopen(USERS_FILE_PATH, "ab");
     if (!f) {
-        ESP_LOGE(TAG, "Failed to open user mapping for append");
+        log_file_error("Open for append", USERS_FILE_PATH);
         return ESP_FAIL;
     }
 
     int written = fprintf(f, "%u,%s\n", (unsigned int)id, name);
-    fclose(f);
-
-    if (written <= 0) return ESP_FAIL;
+    if (written <= 0) {
+        log_file_error("Write", USERS_FILE_PATH);
+        fclose(f);
+        return ESP_FAIL;
+    }
+    if (fclose(f) != 0) {
+        log_file_error("Close", USERS_FILE_PATH);
+        return ESP_FAIL;
+    }
 
     ESP_LOGI(TAG, "Created default user mapping: ID=%u name=%s",
              (unsigned int)id, name);
@@ -162,12 +190,24 @@ static esp_err_t ensure_user_profile(uint16_t id)
 
 static esp_err_t reset_user_profiles(void)
 {
+    errno = 0;
     FILE *f = fopen(USERS_FILE_PATH, "wb");
-    if (!f) return ESP_FAIL;
+    if (!f) {
+        log_file_error("Reset", USERS_FILE_PATH);
+        return ESP_FAIL;
+    }
 
     int ok = fputs("id,name\n", f);
-    fclose(f);
-    return ok < 0 ? ESP_FAIL : ESP_OK;
+    if (ok < 0) {
+        log_file_error("Write", USERS_FILE_PATH);
+        fclose(f);
+        return ESP_FAIL;
+    }
+    if (fclose(f) != 0) {
+        log_file_error("Close", USERS_FILE_PATH);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 static bool get_local_time(time_t *now_out, struct tm *tm_out,
@@ -239,6 +279,7 @@ static void handle_recognition(uint16_t id, float similarity)
     time_t now = 0;
 
     if (!sd_ready()) {
+        ESP_LOGE(TAG, "SD mount point is unavailable: %s", BSP_SD_MOUNT_POINT);
         publish_event(ATTENDANCE_EVENT_STORAGE_ERROR, id, similarity, NULL, NULL);
         return;
     }
@@ -275,8 +316,10 @@ static void handle_recognition(uint16_t id, float similarity)
     snprintf(csv_name, sizeof(csv_name), "%s", name);
     sanitize_csv_text(csv_name);
 
+    errno = 0;
     FILE *f = fopen(ATTENDANCE_FILE_PATH, "ab");
     if (!f) {
+        log_file_error("Open for append", ATTENDANCE_FILE_PATH);
         publish_event(ATTENDANCE_EVENT_STORAGE_ERROR,
                       id, similarity, name, timestamp);
         return;
@@ -287,9 +330,15 @@ static void handle_recognition(uint16_t id, float similarity)
                           (unsigned int)id,
                           csv_name,
                           similarity);
-    fclose(f);
-
     if (written <= 0) {
+        log_file_error("Write", ATTENDANCE_FILE_PATH);
+        fclose(f);
+        publish_event(ATTENDANCE_EVENT_STORAGE_ERROR,
+                      id, similarity, name, timestamp);
+        return;
+    }
+    if (fclose(f) != 0) {
+        log_file_error("Close", ATTENDANCE_FILE_PATH);
         publish_event(ATTENDANCE_EVENT_STORAGE_ERROR,
                       id, similarity, name, timestamp);
         return;
@@ -307,8 +356,10 @@ static void handle_recognition(uint16_t id, float similarity)
 static void attendance_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "Attendance worker ready, dedup=%d s",
-             ATTENDANCE_DEDUP_WINDOW_SEC);
+    ESP_LOGI(TAG, "Attendance worker ready, dedup=%d s, users=%s, records=%s",
+             ATTENDANCE_DEDUP_WINDOW_SEC,
+             USERS_FILE_PATH,
+             ATTENDANCE_FILE_PATH);
 
     attendance_msg_t msg = {0};
     while (true) {

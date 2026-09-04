@@ -101,10 +101,9 @@ static void face_identity_ui_cb(const face_identity_event_t *event)
     case FACE_IDENTITY_RECOGNIZED:
         if (s_identity_label) {
             lv_label_set_text_fmt(s_identity_label,
-                                  "识别成功\nID: %u\n相似度: %.1f%%\n%u ms",
+                                  "识别成功\nID: %u\n相似度: %.1f%%",
                                   (unsigned int)event->id,
-                                  event->similarity * 100.0f,
-                                  (unsigned int)event->latency_ms);
+                                  event->similarity * 100.0f);
             lv_obj_set_style_text_color(s_identity_label, lv_color_hex(0x00ff88), 0);
         }
         break;
@@ -120,9 +119,8 @@ static void face_identity_ui_cb(const face_identity_event_t *event)
     case FACE_IDENTITY_ENROLLED:
         if (s_identity_label) {
             lv_label_set_text_fmt(s_identity_label,
-                                  "注册成功\nID: %u\n%u ms",
-                                  (unsigned int)event->id,
-                                  (unsigned int)event->latency_ms);
+                                  "注册成功\nID: %u",
+                                  (unsigned int)event->id);
             lv_obj_set_style_text_color(s_identity_label, lv_color_hex(0x00ff88), 0);
         }
         set_attendance_locked("已建立姓名映射\n等待首次签到", 0x81c784);
@@ -320,21 +318,26 @@ void screen_face_create(lv_obj_t *scr)
     lv_obj_set_style_text_color(s_db_label, lv_color_hex(0xaaaaaa), 0);
     lv_obj_align(s_db_label, LV_ALIGN_TOP_LEFT, 0, 0);
 
+    /* 固定识别信息区域高度，继续使用项目的中文 24px 字体。
+     * 文本最多显示三行，避免向下侵入签到区和按钮区。 */
     s_identity_label = lv_label_create(side_panel);
     lv_label_set_text(s_identity_label, "等待识别");
-    lv_obj_set_width(s_identity_label, 180);
+    lv_obj_set_size(s_identity_label, 180, 86);
+    lv_label_set_long_mode(s_identity_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_identity_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_identity_label, lv_color_hex(0xaaaaaa), 0);
     lv_obj_set_style_text_font(s_identity_label, &lv_font_utf_24, 0);
-    lv_obj_align(s_identity_label, LV_ALIGN_TOP_MID, 0, 42);
+    lv_obj_align(s_identity_label, LV_ALIGN_TOP_MID, 0, 32);
 
+    /* 签到信息单独占用固定区域，并与注册按钮保留间距。 */
     s_attendance_label = lv_label_create(side_panel);
     lv_label_set_text(s_attendance_label, "等待签到");
-    lv_obj_set_width(s_attendance_label, 180);
+    lv_obj_set_size(s_attendance_label, 180, 82);
+    lv_label_set_long_mode(s_attendance_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(s_attendance_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_attendance_label, lv_color_hex(0xaaaaaa), 0);
     lv_obj_set_style_text_font(s_attendance_label, &lv_font_utf_24, 0);
-    lv_obj_align(s_attendance_label, LV_ALIGN_TOP_MID, 0, 158);
+    lv_obj_align(s_attendance_label, LV_ALIGN_TOP_MID, 0, 126);
 
     lv_obj_t *btn_enroll = lv_btn_create(side_panel);
     lv_obj_set_size(btn_enroll, 170, 56);

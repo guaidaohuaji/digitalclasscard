@@ -1,4 +1,5 @@
 #include "face_detector.h"
+#include "attendance_manager.h"
 
 #include "bsp/esp-bsp.h"
 #include "human_face_detect.hpp"
@@ -114,6 +115,11 @@ static void process_identity(const dl::image::img_t &img,
 
         if (ret == ESP_OK) {
             s_enroll_requested.store(false);
+            esp_err_t attendance_ret = attendance_manager_notify_database_cleared();
+            if (attendance_ret != ESP_OK && attendance_ret != ESP_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "Attendance DB-clear notification failed: %s",
+                         esp_err_to_name(attendance_ret));
+            }
             ESP_LOGI(TAG, "Face database cleared");
             publish_identity(FACE_IDENTITY_DB_CLEARED, 0, 0.0f, 0, latency_ms);
         } else {
@@ -153,6 +159,11 @@ static void process_identity(const dl::image::img_t &img,
         if (ret == ESP_OK) {
             const int count = recognizer->get_num_feats();
             s_enroll_requested.store(false);
+            esp_err_t attendance_ret = attendance_manager_notify_enrolled((uint16_t)count);
+            if (attendance_ret != ESP_OK && attendance_ret != ESP_ERR_TIMEOUT) {
+                ESP_LOGW(TAG, "Attendance enrollment notification failed: %s",
+                         esp_err_to_name(attendance_ret));
+            }
             ESP_LOGI(TAG, "Enrollment success: ID=%d total=%d latency=%u ms",
                      count, count, (unsigned int)latency_ms);
             publish_identity(FACE_IDENTITY_ENROLLED,
@@ -188,6 +199,13 @@ static void process_identity(const dl::image::img_t &img,
                  (unsigned int)best.id,
                  best.similarity,
                  (unsigned int)latency_ms);
+
+        esp_err_t attendance_ret = attendance_manager_submit_recognition(best.id, best.similarity);
+        if (attendance_ret != ESP_OK && attendance_ret != ESP_ERR_TIMEOUT) {
+            ESP_LOGW(TAG, "Attendance submit failed: %s",
+                     esp_err_to_name(attendance_ret));
+        }
+
         publish_identity(FACE_IDENTITY_RECOGNIZED,
                          best.id,
                          best.similarity,
@@ -338,6 +356,12 @@ extern "C" void face_detector_set_identity_callback(face_identity_event_cb_t cb)
 
 extern "C" esp_err_t face_detector_start(void)
 {
+    esp_err_t attendance_ret = attendance_manager_start();
+    if (attendance_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Attendance worker unavailable: %s",
+                 esp_err_to_name(attendance_ret));
+    }
+
     esp_err_t ret = ensure_detector_worker();
     if (ret != ESP_OK) return ret;
 

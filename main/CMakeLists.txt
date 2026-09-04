@@ -15,6 +15,7 @@ idf_component_register(
         function_aichat/audio_recorder.c
         function_aichat/ai_chat_api.c
         function_face/camera_preview.c
+        function_face/face_detector.cpp
     INCLUDE_DIRS
         .
         ui

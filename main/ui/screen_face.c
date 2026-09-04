@@ -2,7 +2,10 @@
 #include "lvgl.h"
 #include "camera_preview.h"
 #include "face_detector.h"
+#include "attendance_manager.h"
 #include "esp_lv_adapter.h"
+
+#include <string.h>
 
 #define FACE_BOX_COUNT FACE_DETECT_MAX_RESULTS
 
@@ -10,6 +13,7 @@ static lv_obj_t *s_face_boxes[FACE_BOX_COUNT] = {0};
 static lv_obj_t *s_face_score_labels[FACE_BOX_COUNT] = {0};
 static lv_obj_t *s_detect_info = NULL;
 static lv_obj_t *s_identity_label = NULL;
+static lv_obj_t *s_attendance_label = NULL;
 static lv_obj_t *s_db_label = NULL;
 
 static void set_identity_locked(const char *text, uint32_t color)
@@ -17,6 +21,13 @@ static void set_identity_locked(const char *text, uint32_t color)
     if (!s_identity_label) return;
     lv_label_set_text(s_identity_label, text);
     lv_obj_set_style_text_color(s_identity_label, lv_color_hex(color), 0);
+}
+
+static void set_attendance_locked(const char *text, uint32_t color)
+{
+    if (!s_attendance_label) return;
+    lv_label_set_text(s_attendance_label, text);
+    lv_obj_set_style_text_color(s_attendance_label, lv_color_hex(color), 0);
 }
 
 static void hide_face_boxes_locked(void)
@@ -33,6 +44,7 @@ static void hide_face_boxes_locked(void)
         lv_label_set_text(s_db_label, "DB: --");
     }
     set_identity_locked("等待识别", 0xaaaaaa);
+    set_attendance_locked("等待签到", 0xaaaaaa);
 }
 
 static void face_detect_ui_cb(const face_detect_result_t *results,
@@ -113,6 +125,7 @@ static void face_identity_ui_cb(const face_identity_event_t *event)
                                   (unsigned int)event->latency_ms);
             lv_obj_set_style_text_color(s_identity_label, lv_color_hex(0x00ff88), 0);
         }
+        set_attendance_locked("已建立姓名映射\n等待首次签到", 0x81c784);
         break;
 
     case FACE_IDENTITY_ENROLL_WAIT_FACE:
@@ -125,11 +138,56 @@ static void face_identity_ui_cb(const face_identity_event_t *event)
 
     case FACE_IDENTITY_DB_CLEARED:
         set_identity_locked("人脸库已清空", 0xffc857);
+        set_attendance_locked("姓名映射已重置\n历史签到保留", 0xffc857);
         break;
 
     case FACE_IDENTITY_DB_ERROR:
     default:
         set_identity_locked("人脸库错误\n请检查 SD 卡", 0xff4444);
+        break;
+    }
+
+    esp_lv_adapter_unlock();
+}
+
+static void attendance_ui_cb(const attendance_event_t *event)
+{
+    if (!event) return;
+    if (esp_lv_adapter_lock(-1) != ESP_OK) return;
+
+    const char *time_only = event->timestamp;
+    if (strlen(event->timestamp) >= 19) {
+        time_only = event->timestamp + 11;
+    }
+
+    switch (event->type) {
+    case ATTENDANCE_EVENT_RECORDED:
+        if (s_attendance_label) {
+            lv_label_set_text_fmt(s_attendance_label,
+                                  "签到成功\n%s\n%s",
+                                  event->name[0] ? event->name : "--",
+                                  time_only);
+            lv_obj_set_style_text_color(s_attendance_label, lv_color_hex(0x00ff88), 0);
+        }
+        break;
+
+    case ATTENDANCE_EVENT_DUPLICATE:
+        if (s_attendance_label) {
+            lv_label_set_text_fmt(s_attendance_label,
+                                  "已签到：%s\n%d秒内重复已忽略",
+                                  event->name[0] ? event->name : "--",
+                                  ATTENDANCE_DEDUP_WINDOW_SEC);
+            lv_obj_set_style_text_color(s_attendance_label, lv_color_hex(0x81c784), 0);
+        }
+        break;
+
+    case ATTENDANCE_EVENT_TIME_INVALID:
+        set_attendance_locked("系统时间未同步\n暂不写入签到", 0xffc857);
+        break;
+
+    case ATTENDANCE_EVENT_STORAGE_ERROR:
+    default:
+        set_attendance_locked("签到写入失败\n请检查 SD 卡", 0xff4444);
         break;
     }
 
@@ -191,7 +249,7 @@ void screen_face_create(lv_obj_t *scr)
     lv_obj_center(back_label);
 
     lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "人脸注册 / 识别");
+    lv_label_set_text(title, "人脸注册 / 识别 / 签到");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(title, &lv_font_utf_24, 0);
     lv_obj_center(title);
@@ -247,7 +305,7 @@ void screen_face_create(lv_obj_t *scr)
         lv_obj_add_flag(s_face_boxes[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    // 右侧识别信息 / 操作区。
+    // 右侧识别信息 / 签到 / 操作区。
     lv_obj_t *side_panel = lv_obj_create(scr);
     lv_obj_set_size(side_panel, 210, 380);
     lv_obj_align(side_panel, LV_ALIGN_CENTER, 350, -20);
@@ -268,7 +326,15 @@ void screen_face_create(lv_obj_t *scr)
     lv_obj_set_style_text_align(s_identity_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(s_identity_label, lv_color_hex(0xaaaaaa), 0);
     lv_obj_set_style_text_font(s_identity_label, &lv_font_utf_24, 0);
-    lv_obj_align(s_identity_label, LV_ALIGN_TOP_MID, 0, 45);
+    lv_obj_align(s_identity_label, LV_ALIGN_TOP_MID, 0, 42);
+
+    s_attendance_label = lv_label_create(side_panel);
+    lv_label_set_text(s_attendance_label, "等待签到");
+    lv_obj_set_width(s_attendance_label, 180);
+    lv_obj_set_style_text_align(s_attendance_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(s_attendance_label, lv_color_hex(0xaaaaaa), 0);
+    lv_obj_set_style_text_font(s_attendance_label, &lv_font_utf_24, 0);
+    lv_obj_align(s_attendance_label, LV_ALIGN_TOP_MID, 0, 158);
 
     lv_obj_t *btn_enroll = lv_btn_create(side_panel);
     lv_obj_set_size(btn_enroll, 170, 56);
@@ -301,5 +367,6 @@ void screen_face_create(lv_obj_t *scr)
 
     face_detector_set_result_callback(face_detect_ui_cb);
     face_detector_set_identity_callback(face_identity_ui_cb);
+    attendance_manager_set_callback(attendance_ui_cb);
     camera_preview_bind_ui(camera_canvas, status);
 }

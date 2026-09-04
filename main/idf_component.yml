@@ -9,6 +9,8 @@ dependencies:
     version: "0.3.*"
     public: true
   espressif/cjson: "~1.7.19"
+  espressif/human_face_detect:
+    version: "~0.5.0"
   espressif/esp_wifi_remote:
     version: ">=0.10,<2.0"
     rules:

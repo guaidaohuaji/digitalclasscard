@@ -289,6 +289,12 @@ static void handle_recognition(uint16_t id, float similarity)
         return;
     }
 
+    /* Backfill the user mapping when face.db already contains IDs created by
+     * an older firmware that did not have users.csv yet. */
+    if (ensure_user_profile(id) != ESP_OK) {
+        publish_event(ATTENDANCE_EVENT_STORAGE_ERROR, id, similarity, NULL, timestamp);
+        return;
+    }
     lookup_name(id, name, sizeof(name));
 
     attendance_cache_entry_t *entry = get_cache_entry(id);

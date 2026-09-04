@@ -1,4 +1,5 @@
 #include "camera_preview.h"
+#include "face_detector.h"
 
 #include "bsp/esp-bsp.h"
 #include "esp_video_device.h"
@@ -19,13 +20,14 @@
 
 #define TAG "camera_preview"
 
-#define CAPTURE_BUF_COUNT   2
-#define PREVIEW_WIDTH       640
-#define PREVIEW_HEIGHT      360
-#define PREVIEW_BPP         2
-#define PREVIEW_TASK_STACK  (8 * 1024)
-#define PREVIEW_TASK_PRIO   6
-#define ALIGN_UP(num, align) (((num) + ((align) - 1)) & ~((align) - 1))
+#define CAPTURE_BUF_COUNT       2
+#define PREVIEW_WIDTH           640
+#define PREVIEW_HEIGHT          360
+#define PREVIEW_BPP             2
+#define PREVIEW_TASK_STACK      (8 * 1024)
+#define PREVIEW_TASK_PRIO       6
+#define DETECT_FRAME_INTERVAL   3
+#define ALIGN_UP(num, align)     (((num) + ((align) - 1)) & ~((align) - 1))
 
 typedef struct {
     void *addr;
@@ -247,6 +249,7 @@ static void preview_task(void *arg)
 {
     (void)arg;
     bool stream_on = false;
+    uint32_t frame_counter = 0;
 
     ui_set_status("正在启动摄像头...", 0xaaaaaa);
 
@@ -294,8 +297,22 @@ static void preview_task(void *arg)
             ret = scale_to_preview((const uint8_t *)s_capture[buf.index].addr,
                                    fmt.fmt.pix.width, fmt.fmt.pix.height,
                                    dst, s_preview_buf_size);
-            if (ret == ESP_OK && s_canvas && !s_stop_requested) {
-                if (esp_lv_adapter_lock(-1) == ESP_OK) {
+            if (ret == ESP_OK) {
+                frame_counter++;
+                if ((frame_counter % DETECT_FRAME_INTERVAL) == 0 && !s_stop_requested) {
+                    esp_err_t detect_ret = face_detector_submit_rgb565(
+                        dst,
+                        PREVIEW_WIDTH * PREVIEW_HEIGHT * PREVIEW_BPP,
+                        PREVIEW_WIDTH,
+                        PREVIEW_HEIGHT);
+                    if (detect_ret != ESP_OK &&
+                        detect_ret != ESP_ERR_TIMEOUT &&
+                        detect_ret != ESP_ERR_INVALID_STATE) {
+                        ESP_LOGW(TAG, "Face frame submit failed: %s", esp_err_to_name(detect_ret));
+                    }
+                }
+
+                if (s_canvas && !s_stop_requested && esp_lv_adapter_lock(-1) == ESP_OK) {
                     lv_canvas_set_buffer(s_canvas, dst, PREVIEW_WIDTH, PREVIEW_HEIGHT, s_lv_fmt);
                     lv_obj_invalidate(s_canvas);
                     esp_lv_adapter_unlock();
@@ -310,6 +327,7 @@ static void preview_task(void *arg)
     }
 
 exit_task:
+    face_detector_stop();
     if (stream_on && s_fd >= 0) {
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         ioctl(s_fd, VIDIOC_STREAMOFF, &type);
@@ -333,6 +351,12 @@ esp_err_t camera_preview_start(void)
     if (s_running) return ESP_OK;
     if (!s_canvas) return ESP_ERR_INVALID_STATE;
 
+    esp_err_t detect_ret = face_detector_start();
+    if (detect_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Face detector unavailable, preview will continue: %s",
+                 esp_err_to_name(detect_ret));
+    }
+
     s_stop_requested = false;
     s_running = true;
     BaseType_t ok = xTaskCreatePinnedToCore(preview_task, "camera_preview",
@@ -340,6 +364,7 @@ esp_err_t camera_preview_start(void)
                                             PREVIEW_TASK_PRIO, &s_task, 0);
     if (ok != pdPASS) {
         s_running = false;
+        face_detector_stop();
         return ESP_ERR_NO_MEM;
     }
 
@@ -348,6 +373,7 @@ esp_err_t camera_preview_start(void)
 
 void camera_preview_stop(void)
 {
+    face_detector_stop();
     if (s_running) {
         s_stop_requested = true;
     }

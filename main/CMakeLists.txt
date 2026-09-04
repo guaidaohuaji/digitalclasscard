@@ -16,6 +16,7 @@ idf_component_register(
         function_aichat/ai_chat_api.c
         function_face/camera_preview.c
         function_face/face_detector.cpp
+        function_face/attendance_manager.c
     INCLUDE_DIRS
         .
         ui

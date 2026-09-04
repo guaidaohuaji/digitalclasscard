@@ -54,6 +54,8 @@ static void detector_task(void *arg)
     if (detector == NULL) {
         ESP_LOGE(TAG, "Failed to create HumanFaceDetect");
         s_enabled = false;
+        if (s_frame_queue) xQueueReset(s_frame_queue);
+        if (s_buffer_free) xSemaphoreGive(s_buffer_free);
         s_task = NULL;
         vTaskDelete(NULL);
         return;
@@ -211,10 +213,9 @@ extern "C" esp_err_t face_detector_submit_rgb565(const void *frame,
 
     memcpy(s_frame_buffer, frame, required);
 
-    detector_frame_t item = {
-        .width = width,
-        .height = height,
-    };
+    detector_frame_t item;
+    item.width = width;
+    item.height = height;
 
     if (xQueueSend(s_frame_queue, &item, 0) != pdTRUE) {
         xSemaphoreGive(s_buffer_free);

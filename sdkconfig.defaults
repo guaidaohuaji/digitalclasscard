@@ -74,10 +74,17 @@ CONFIG_CAMERA_SC2336_MIPI_RAW8_1280X720_30FPS=y
 CONFIG_CAM_CTRL_SPI_ENABLE=n
 
 # ---------- ESP-DL face detection ----------
-# Use the lightweight two-stage MSR+MNP model and keep it in flash rodata.
+# Use the lightweight two-stage MSR+MNP detector and keep it in flash rodata.
 CONFIG_FLASH_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y
 CONFIG_HUMAN_FACE_DETECT_MSRMNP_S8_V1=y
 CONFIG_HUMAN_FACE_DETECT_MODEL_IN_FLASH_RODATA=y
+
+# ---------- ESP-DL face recognition ----------
+# MFN is the faster P4 face feature model. Keep the model in flash rodata;
+# only the enrolled feature database is persisted on the SD card.
+CONFIG_FLASH_HUMAN_FACE_FEAT_MFN_S8_V1=y
+CONFIG_HUMAN_FACE_FEAT_MFN_S8_V1=y
+CONFIG_HUMAN_FACE_FEAT_MODEL_IN_FLASH_RODATA=y
 
 # Use dynamic TLS buffers to reduce temporary internal-memory pressure.
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y

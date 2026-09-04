@@ -49,14 +49,16 @@ esp_err_t attendance_manager_submit_recognition(uint16_t id, float similarity);
 
 /**
  * Inform the manager that a new face ID was enrolled. A default name mapping
- * such as "用户1" is created in /sdcard/face_users.csv when no mapping exists.
+ * such as "用户1" is created in /sdcard/users.csv when no mapping exists.
+ * The 8.3-compatible file name is intentional so this also works with FATFS
+ * builds that were generated before long-file-name support was enabled.
  */
 esp_err_t attendance_manager_notify_enrolled(uint16_t id);
 
 /**
  * Inform the manager that the ESP-DL face database was cleared. User mappings
  * and in-memory de-duplication state are reset, while historical attendance
- * records are intentionally retained.
+ * records in /sdcard/attend.csv are intentionally retained.
  */
 esp_err_t attendance_manager_notify_database_cleared(void);
 

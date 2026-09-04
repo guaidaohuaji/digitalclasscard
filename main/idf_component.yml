@@ -10,7 +10,7 @@ dependencies:
     public: true
   espressif/cjson: "~1.7.19"
   espressif/human_face_detect:
-    version: "~0.5.0"
+    version: "~0.4.1"
   espressif/human_face_recognition:
     version: "~0.3.2"
   espressif/esp_wifi_remote:

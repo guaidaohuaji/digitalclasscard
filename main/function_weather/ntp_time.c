@@ -1,3 +1,19 @@
+/*
+ * ======================= 学习注释：NTP/SNTP 校时 =====================
+ *
+ * 网络层次：
+ *   SNTP/NTP -> UDP -> IP -> Wi-Fi
+ *
+ * 本工程直接配置 NTP Server 的 IP，而不是域名，因此省去了 DNS 查询。
+ * esp_netif_sntp_init() 内部负责 UDP socket、NTP 报文收发和系统时间更新，
+ * 应用层不需要自己调用 sendto()/recvfrom()。
+ *
+ * time_sync_notification_cb() 是“时间同步完成”回调。
+ * 同步成功后设置 TZ=CST-8，再通过 localtime_r()/strftime() 得到北京时间字符串。
+ *
+ * 注意：NTP 返回不是 UDP 广播，而是服务器针对客户端请求返回的响应。
+ * ====================================================================
+ */
 #include "ntp_time.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"

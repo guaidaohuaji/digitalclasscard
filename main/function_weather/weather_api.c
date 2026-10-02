@@ -1,3 +1,24 @@
+/*
+ * ===================== 学习注释：天气 HTTPS + JSON ===================
+ *
+ * 调用链：
+ *   weather_fetch_forecast()
+ *     -> 生成 Open-Meteo URL
+ *     -> esp_http_client_perform()
+ *     -> TLS over TCP 建立 HTTPS 连接并发送 GET
+ *     -> HTTP_EVENT_ON_DATA 分块收到响应
+ *     -> 把多个数据块拼入 g_http_buf
+ *     -> cJSON_Parse()
+ *     -> 提取 hourly/time/temperature/weathercode/humidity
+ *
+ * 两个 Buffer 不要混淆：
+ *   .buffer_size = 4096   : esp_http_client 内部一次接收用的缓冲区；
+ *   g_http_buf = 16384 B  : 应用层把多次 HTTP_EVENT_ON_DATA 拼成完整 JSON。
+ *
+ * TCP 是字节流，所以一次 HTTP 响应不保证一次回调就全部收到；
+ * _http_event_handler() 的 memcpy 累加正是在解决“分块到达”问题。
+ * ====================================================================
+ */
 #include "weather_api.h"
 #include "esp_log.h"
 #include "esp_http_client.h"

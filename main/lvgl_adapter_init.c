@@ -1,4 +1,26 @@
 /*
+ * ===================== 学习注释：LVGL/显示适配层 =====================
+ *
+ * 这个文件负责把“板级 LCD/触摸硬件”接到 LVGL。
+ *
+ * 显示链路可以理解为：
+ *   LVGL 绘图 -> LVGL draw buffer -> esp_lv_adapter -> LCD panel driver
+ *             -> ESP32-P4 MIPI-DSI Host -> D-PHY -> LCD Panel
+ *
+ * lvgl_adapter_init() 的关键步骤：
+ *   1. bsp_display_new_with_handles()：由 BSP 创建 LCD panel/IO 等底层句柄；
+ *   2. esp_lv_adapter_init()：初始化 Espressif 的 LVGL 适配层；
+ *   3. esp_lv_adapter_register_display()：把 LCD 注册为 LVGL display；
+ *   4. 优先让 LVGL draw buffer 放在 PSRAM，失败时退回内部 SRAM；
+ *   5. bsp_touch_new() + register_touch()：注册触摸输入设备；
+ *   6. esp_lv_adapter_start()：启动适配器自己的 LVGL 任务/定时处理。
+ *
+ * 文件后半部分把 FATFS/SD 卡包装成 LVGL 文件系统驱动：
+ *   "S:/xxx" -> /sdcard/xxx
+ * 这样 LVGL 图片等资源可以直接通过 S: 盘符访问 SD 卡文件。
+ * ====================================================================
+ */
+/*
  * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0

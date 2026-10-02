@@ -1,3 +1,33 @@
+/*
+ * ===================== 学习注释：ESP-DL 人脸推理 =====================
+ *
+ * 这个文件负责“AI 检测/识别”，摄像头采集在 camera_preview.c。
+ *
+ * 关键组件：
+ *   HumanFaceDetect      : 人脸检测，输出 bounding box + score；
+ *   HumanFaceRecognizer  : 人脸注册/特征提取/数据库匹配；
+ *   face.db              : SD 卡上的已注册人脸特征数据库。
+ *
+ * 推理路径：
+ *   RGB565 frame
+ *      -> face_detector_submit_rgb565()
+ *      -> 拷贝到独立 inference buffer
+ *      -> Queue 通知 detector_task
+ *      -> HumanFaceDetect::run()
+ *      -> 得到人脸框
+ *      -> HumanFaceRecognizer::enroll() 或 recognize()
+ *      -> ID + similarity
+ *      -> attendance_manager
+ *
+ * Queue 中只放 width/height，不把整张数百 KB 图像复制进 Queue；
+ * 大图像放 s_frame_buffer。Binary Semaphore s_buffer_free 表示该推理 Buffer
+ * 是否空闲。Take(timeout=0) 失败就丢帧，因此 Camera Task 永远不会等 AI。
+ *
+ * “人脸识别”不是图片直接变 ID：
+ * 模型先把检测到的人脸转换为高维特征向量，再与 face.db 中的特征比较，
+ * 匹配成功后返回数据库记录对应的 ID 和 similarity。
+ * ====================================================================
+ */
 #include "face_detector.h"
 #include "attendance_manager.h"
 

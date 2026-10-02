@@ -1,3 +1,32 @@
+/*
+ * =================== 学习注释：摄像头/V4L2/PPA/LVGL ==================
+ *
+ * 这是理解视觉链路最重要的文件之一。
+ *
+ * 数据路径：
+ *   Camera Sensor
+ *     -> MIPI-CSI / esp_video
+ *     -> V4L2 video device
+ *     -> MMAP capture buffer
+ *     -> VIDIOC_DQBUF 取一帧
+ *     -> PPA 硬件缩放
+ *     -> 640x360 RGB565 preview buffer
+ *        -> LVGL Canvas 显示
+ *        -> 每 3 帧提交 1 帧给 face_detector
+ *
+ * V4L2 Buffer 的典型循环：
+ *   REQBUFS -> QUERYBUF -> mmap -> QBUF -> STREAMON
+ *   -> DQBUF(拿到完成帧) -> 处理 -> QBUF(还给驱动)
+ *
+ * CAPTURE_BUF_COUNT=2 表示摄像头侧使用双 Buffer，减少采集与处理互相等待。
+ *
+ * PPA 是 ESP32-P4 芯片内部的 Pixel Processing Accelerator，不是外部芯片。
+ * CPU 配置输入/输出地址、宽高、缩放比例等，PPA 的专用硬件执行像素缩放。
+ *
+ * 人脸推理采用“非阻塞提交”：如果上一帧还在推理，新帧直接跳过，
+ * 目的是不让慢速 AI 推理反过来卡住摄像头预览。
+ * ====================================================================
+ */
 #include "camera_preview.h"
 #include "face_detector.h"
 

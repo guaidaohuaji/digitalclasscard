@@ -1,3 +1,24 @@
+/*
+ * ======================== 学习注释：考勤业务层 ========================
+ *
+ * face_detector 只负责“识别出 ID”，本文件负责“识别后做什么”：
+ *   - 根据 ID 查 users.csv 中的姓名；
+ *   - 检查系统时间是否已经 NTP 同步；
+ *   - 做重复签到时间窗口过滤；
+ *   - 把签到结果追加到 attend.csv；
+ *   - 通过 callback 把结果通知 UI。
+ *
+ * 为什么单独创建 attendance_task：
+ *   SD 卡 fopen/fprintf/fclose 可能比较慢，不应该阻塞人脸推理 Task。
+ *   face_detector 只把一个很小的 attendance_msg_t 放入 Queue 即可继续推理。
+ *
+ * Queue 是固定长度消息传递：
+ *   [type, id, similarity]
+ * 真正文件 I/O 在 attendance_task 中串行执行，因此也避免多个任务同时写 CSV。
+ *
+ * s_cache 是 RAM 中的去重缓存；它不是永久数据库，重启后会重新开始统计。
+ * ====================================================================
+ */
 #include "attendance_manager.h"
 
 #include "bsp/esp-bsp.h"

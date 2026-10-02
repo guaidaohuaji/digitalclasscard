@@ -1,3 +1,25 @@
+/*
+ * ======================= 学习注释：Wi-Fi 管理 ========================
+ *
+ * 这是典型 ESP-IDF Station 模式：
+ *   esp_netif 初始化 -> 默认事件循环 -> 创建 STA netif
+ *   -> esp_wifi_init -> 配置 SSID/密码 -> WIFI_MODE_STA -> esp_wifi_start
+ *
+ * 连接是“事件驱动”的，不是在 wifi_task 里一直轮询：
+ *   WIFI_EVENT_STA_START        -> esp_wifi_connect()
+ *   WIFI_EVENT_STA_DISCONNECTED -> 自动重连
+ *   IP_EVENT_STA_GOT_IP         -> DHCP 已完成，获得 IP 后置 WIFI_CONNECTED_BIT
+ *
+ * EventGroup 的作用：
+ *   WIFI_CONNECTED_BIT 是跨任务共享的“网络已可用”状态。
+ *   Weather Task 可以 xEventGroupWaitBits() 阻塞等待，不需要忙等。
+ *
+ * ESP32-P4 本身没有传统片上 Wi-Fi 射频，本工程通过 esp_wifi_remote /
+ * ESP-Hosted 使用配套网络芯片；应用层仍然使用标准 esp_wifi/esp_netif API。
+ *
+ * 注意：Wi-Fi 已关联 AP 不等于可以联网；收到 GOT_IP 才说明 DHCP 网络参数已就绪。
+ * ====================================================================
+ */
 #include "wifi_manager.h"
 #include "esp_log.h"
 #include "esp_wifi.h"

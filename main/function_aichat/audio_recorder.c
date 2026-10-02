@@ -1,3 +1,24 @@
+/*
+ * ====================== 学习注释：I2S -> WAV 录音 ====================
+ *
+ * 音频链路：
+ *   麦克风/I2S 数据 -> ESP32-P4 I2S RX -> DMA/驱动 Buffer
+ *   -> rec_task 读取 -> 转成 16-bit mono PCM -> 写入 SD 卡 WAV 文件。
+ *
+ * 录音目标格式：
+ *   16 kHz / 16 bit / 单声道，原始 PCM 约 16000*2 = 32000 Byte/s。
+ *
+ * 为什么文件开始先写 dummy WAV header：
+ *   开始录音时还不知道最终 PCM 数据长度，所以先占位；
+ *   stop 时已经知道 s_data_bytes，再 fseek(0) 回文件头补写正确 RIFF/WAV 长度。
+ *
+ * 当前 I2S 接收按 32-bit stereo slot 读取，再从对应 slot 的高 16 bit
+ * 提取为 16-bit mono，这一转换是理解本文件的关键。
+ *
+ * I2S channel 采用“录音时创建、结束后删除”的延迟初始化方式，
+ * 这样不用录音时可以归还相关 DMA/驱动资源。
+ * ====================================================================
+ */
 #include "audio_recorder.h"
 #include "esp_log.h"
 #include "esp_err.h"

@@ -1,3 +1,22 @@
+/*
+ * ======================= 学习注释：AI 对话页面 =======================
+ *
+ * UI 事件链：
+ *   按住麦克风 -> audio_recorder_start()
+ *   松开       -> audio_recorder_stop()
+ *              -> 创建 ai_process_task
+ *              -> ai_chat_process()
+ *              -> ASR 文本 + LLM 回复
+ *              -> 加锁后更新 LVGL
+ *
+ * 为什么网络请求放到 ai_process_task：
+ *   HTTPS、文件上传、ASR 轮询都可能阻塞数秒，如果直接在 LVGL 事件回调里执行，
+ *   会卡住 GUI。单独任务可以让界面任务继续刷新。
+ *
+ * rec_timer 只是 LVGL 软件定时器，用于更新“录音秒数/进度条”，它不负责真正录音。
+ * 真正的 PCM 采集由 audio_recorder.c 中的 I2S + rec_task 完成。
+ * ====================================================================
+ */
 #include "ui.h"
 #include "lvgl.h"
 #include "audio_recorder.h"

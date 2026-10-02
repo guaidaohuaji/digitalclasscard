@@ -1,3 +1,30 @@
+/*
+ * ====================== 学习注释：云端 AI 调用链 =====================
+ *
+ * ai_chat_process() 是这个文件最值得先读的公开入口。整体流程：
+ *
+ *   /sdcard/ai_record.wav
+ *      -> 读完整 WAV 文件
+ *      -> 生成 OSS 预签名 URL
+ *      -> HTTPS PUT 上传 WAV
+ *      -> HTTPS POST 提交 Paraformer-v2 ASR 异步任务
+ *      -> 定时轮询 task_id
+ *      -> 下载 ASR 结果并提取文字
+ *      -> 把文字作为 Qwen/LLM 的 user prompt
+ *      -> HTTPS POST
+ *      -> cJSON 解析最终回复
+ *
+ * 这里要把三个概念分清：
+ *   HTTP/HTTPS : 应用层请求/响应协议；
+ *   TLS        : HTTPS 的加密层；
+ *   TCP        : TLS 下面的可靠字节流传输。
+ *
+ * _http_event_cb() 只负责收集 HTTP body 的数据块；真正的业务解析由各 Step 完成。
+ * ASR 和 LLM 是两个不同服务：ASR 做“语音 -> 文字”，LLM 做“文字 -> 文字”。
+ *
+ * OSS 签名用 HMAC-SHA1 + Base64；系统时间必须先同步，否则带过期时间的签名会失败。
+ * ====================================================================
+ */
 #include "ai_chat_api.h"
 #include "ai_chat_config.h"
 #include "esp_log.h"
